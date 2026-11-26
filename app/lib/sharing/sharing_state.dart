@@ -1465,7 +1465,7 @@ class EntryPoint {
   final bool on;
   final int capBytes;
 
-  /// Where it stands now: `off`, `connecting`, `connected`, `not_answering`, `mismatch`, `nothing_heard` or `not_running`.
+  /// Where it stands now: `off`, `connecting`, `connected`, `not_answering`, `nothing_heard` or `not_running`.
   final String state;
 
   /// When that was looked at (ms since the Unix epoch).

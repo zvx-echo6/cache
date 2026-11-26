@@ -20,13 +20,6 @@ String thisDeviceWays(int entriesOn) => switch (entriesOn) {
   _ => 'Wi-Fi and $entriesOn entry points',
 };
 
-/// What an entry point's status says when Cache has only inferred that the network name or passphrase is wrong (it can't see the
-/// rejection itself yet).
-const String kMismatchInferred = 'Probably the wrong network name or passphrase';
-
-/// The exact wording for when the engine can tell for sure. Kept for later; not shown now.
-const String kMismatchExact = "Network name or passphrase doesn't match";
-
 /// "Checked just now", "Checked 2 min ago".
 String checkedText(int? ms) {
   if (ms == null) return 'Checked just now';
@@ -42,7 +35,8 @@ Part entryStateWord(EntryPoint e) => switch (e.state) {
   'off' => const Part('Off'),
   'connected' => const Part('Connected', Tone.ok),
   'not_answering' => const Part('Not answering', Tone.danger, Icons.warning_amber_rounded),
-  'mismatch' => const Part(kMismatchInferred, Tone.danger, Icons.warning_amber_rounded),
+  // No "Network name or passphrase doesn't match" state here: it returns only with an upstream IFAC-failure counter (Prns drops a frame
+  // that fails IFAC without one). Inferring it from bytes with no valid frame fired for the right passphrase on a quiet rnsd (2026-11-25).
   'nothing_heard' => const Part('Connected, nothing heard yet'),
   'not_running' => const Part('Not running'),
   _ => const Part('Connecting…'),

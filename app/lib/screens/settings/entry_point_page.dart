@@ -235,7 +235,6 @@ class _EntryPointPageState extends State<EntryPointPage> {
         1 => '$checked · 1 of your devices is online through it',
         final n => '$checked · $n of your devices are online through it',
       },
-      'mismatch' => 'Check both with whoever runs it, then Save. $checked.',
       'off' || 'connecting' || 'not_running' => null,
       _ => checked,
     };

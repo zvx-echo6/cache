@@ -458,7 +458,6 @@ The entry point is added on all your linked devices.
 Each row shows its address, "Private" if it has a passphrase, the port, and how it is doing:
 - "Connected";
 - "Connected, nothing heard yet": connected, but nothing has come through it yet. A quiet private network can stay like this;
-- "Probably the wrong network name or passphrase": check both with whoever runs it, then tap "Save";
 - "Not answering": Cache keeps trying;
 - "Off".
 

@@ -534,7 +534,6 @@ impl Transport for MultiTransport {
                     cache_rns::EntryState::Connecting => "connecting",
                     cache_rns::EntryState::Connected => "connected",
                     cache_rns::EntryState::NotAnswering => "not_answering",
-                    cache_rns::EntryState::Mismatch => "mismatch",
                     cache_rns::EntryState::NothingHeard => "nothing_heard",
                 };
                 EntryStatus { id, state, checked }

@@ -143,7 +143,7 @@ pub struct PairTarget {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct EntryStatus {
     pub id: String,
-    /// `"off"`, `"connecting"`, `"connected"`, `"not_answering"`, `"mismatch"` or `"nothing_heard"`.
+    /// `"off"`, `"connecting"`, `"connected"`, `"not_answering"` or `"nothing_heard"`.
     pub state: &'static str,
     /// When that was looked at, in ms since the Unix epoch.
     pub checked: u64,

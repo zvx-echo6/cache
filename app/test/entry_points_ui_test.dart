@@ -59,19 +59,18 @@ void main() {
         ..addEntry('b', 'reticulum.example.org', 4965, status: 'not_answering')
         ..addEntry('c', '192.168.1.20', 4242, private: true, network: 'lab', pass: true, on: false)
         ..addEntry('d', 'quiet.example.net', 4242, status: 'nothing_heard')
-        ..addEntry('e', 'mismatch.example.net', 4242, private: true, network: 'x', pass: true, status: 'mismatch')
         ..addEntry('f', 'new.example.net', 4242, status: 'connecting');
       await open(tester, sync, (s) => WaysToConnectPage(sharing: s));
       expect(find.text('No entry points yet'), findsNothing);
       // The rows' words, in the order of the list (by address).
       expect(find.textContaining('Port 4242'), findsWidgets);
-      expect(find.textContaining('Private ·'), findsNWidgets(3));
+      expect(find.textContaining('Private ·'), findsNWidgets(2));
       expect(find.textContaining('Connected'), findsWidgets);
       expect(find.textContaining('Not answering'), findsOneWidget);
       expect(find.textContaining('Off'), findsOneWidget);
       expect(find.textContaining('Connected, nothing heard yet'), findsOneWidget);
-      expect(find.textContaining(kMismatchInferred), findsOneWidget);
-      expect(find.textContaining(kMismatchExact), findsNothing, reason: 'the exact wording is kept for later, not shown');
+      expect(find.textContaining('Probably the wrong'), findsNothing, reason: 'no state guesses a wrong network name or passphrase');
+      expect(find.textContaining("doesn't match"), findsNothing);
       expect(find.textContaining('Connecting…'), findsOneWidget);
     });
 
@@ -133,10 +132,9 @@ void main() {
       expect(find.text('Remove from all my devices'), findsOneWidget);
     });
 
-    testWidgets('not answering, mismatch, nothing heard yet and off each say so', (tester) async {
+    testWidgets('not answering, nothing heard yet and off each say so', (tester) async {
       for (final (state, title, sub) in [
         ('not_answering', 'Not answering', 'Checked just now'),
-        ('mismatch', 'Probably the wrong network name or passphrase', 'Check both with whoever runs it, then Save. Checked just now.'),
         ('nothing_heard', 'Connected, nothing heard yet', 'Checked just now'),
         ('off', 'Off', null),
       ]) {
@@ -147,6 +145,21 @@ void main() {
         if (sub != null) expect(find.descendant(of: box, matching: find.text(sub)), findsOneWidget, reason: state);
         await tester.pumpWidget(const SizedBox());
       }
+    });
+
+    testWidgets('no state, not even an old engine\'s "mismatch", says the network name or passphrase is wrong', (tester) async {
+      final sync = FakeSync()
+        ..addEntry('a', 'rt.example.net', 4242, private: true, network: 'n', pass: true, status: 'mismatch')
+        ..addEntry('b', 'quiet.example.net', 4242, private: true, network: 'n', pass: true, status: 'nothing_heard');
+      await open(tester, sync, (s) => WaysToConnectPage(sharing: s));
+      expect(find.textContaining('Probably the wrong'), findsNothing);
+      expect(find.textContaining("doesn't match"), findsNothing);
+      expect(find.textContaining('Connected, nothing heard yet'), findsOneWidget, reason: 'the list says nothing heard yet for nothing_heard');
+      await tester.pumpWidget(const SizedBox());
+      final sync2 = FakeSync()..addEntry('a', 'rt.example.net', 4242, private: true, network: 'n', pass: true, status: 'mismatch');
+      await open(tester, sync2, (s) => EntryPointPage(sharing: s, id: 'a'));
+      expect(find.textContaining('Probably the wrong'), findsNothing);
+      expect(find.textContaining('Check both with whoever runs it'), findsNothing);
     });
 
     testWidgets('Private network off hides the network name and passphrase', (tester) async {

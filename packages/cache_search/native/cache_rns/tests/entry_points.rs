@@ -441,7 +441,7 @@ async fn an_entry_that_stops_answering_is_not_answering_after_20_seconds() {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-async fn a_wrong_passphrase_is_inferred_and_finds_no_path() {
+async fn a_wrong_passphrase_is_nothing_heard_and_finds_no_path() {
     let p1 = free_port();
     // The rnsd has traffic (it announces a destination of its own every second), so bytes arrive on every client's connection.
     let _s1 = StandIn::server(p1, Some((NAME1, PASS1)), true);
@@ -449,14 +449,58 @@ async fn a_wrong_passphrase_is_inferred_and_finds_no_path() {
     // B is right and heard; G has the wrong passphrase.
     let (_b, _) = start(&kb, vec![Iface::Entry(entry("b1", p1, Some(NAME1), Some(PASS1), true))], vec![&kg]).await;
     let (g, _) = start(&kg, vec![Iface::Entry(entry("g1", p1, Some(NAME1), Some("not-the-passphrase"), true))], vec![&kb]).await;
-    // Not decided yet at first: connected, nothing valid heard.
     until("g1 connected and nothing valid heard", 20, || {
         matches!(state_of(&g, "g1"), Some(EntryState::NothingHeard))
     })
     .await;
-    until("g1 inferred as not matching", 60, || state_of(&g, "g1") == Some(EntryState::Mismatch)).await;
+    // Cache cannot tell a wrong passphrase from a quiet rnsd, so it stays "nothing heard yet" however long bytes keep arriving.
+    let end = Instant::now() + Duration::from_secs(40);
+    while Instant::now() < end {
+        assert_eq!(state_of(&g, "g1"), Some(EntryState::NothingHeard), "a wrong passphrase is only ever nothing heard yet");
+        tokio::time::sleep(Duration::from_millis(500)).await;
+    }
     assert!(!g.reachable(&kb.public()), "no path through a wrong passphrase");
     assert!(!g.find_path_to(&kb.public()).await);
+}
+
+/// A raw TCP server standing in for a quiet rnsd that sends back bytes the node cannot use (a 202-byte frame once a second, like the
+/// echo a real rnsd gave): nothing a node with the right credentials can take as a valid frame.
+async fn echo_server(port: u16) -> tokio::task::JoinHandle<()> {
+    use tokio::io::AsyncWriteExt;
+    let l = tokio::net::TcpListener::bind(("127.0.0.1", port)).await.unwrap();
+    tokio::spawn(async move {
+        loop {
+            let Ok((mut sock, _)) = l.accept().await else { return };
+            tokio::spawn(async move {
+                let mut frame = vec![0x7E];
+                frame.extend(std::iter::repeat_n(0x41u8, 200));
+                frame.push(0x7E);
+                loop {
+                    if sock.write_all(&frame).await.is_err() {
+                        return;
+                    }
+                    tokio::time::sleep(Duration::from_secs(1)).await;
+                }
+            });
+        }
+    })
+}
+
+/// Correct credentials alone on a quiet rnsd that sends back bytes the node cannot use: stays "nothing heard yet", never a mismatch.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn correct_credentials_on_a_quiet_rnsd_that_echoes_stay_nothing_heard() {
+    let p1 = free_port();
+    let srv = echo_server(p1).await;
+    let ka = SecretKey::generate();
+    let (a, _) = start(&ka, vec![], vec![]).await;
+    a.set_entry_points(&[entry("e1", p1, Some(NAME1), Some(PASS1), true)]);
+    until("e1 nothing heard", 20, || state_of(&a, "e1") == Some(EntryState::NothingHeard)).await;
+    let end = Instant::now() + Duration::from_secs(60);
+    while Instant::now() < end {
+        assert_eq!(state_of(&a, "e1"), Some(EntryState::NothingHeard), "unusable bytes never make a state of their own");
+        tokio::time::sleep(Duration::from_millis(500)).await;
+    }
+    srv.abort();
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
@@ -533,9 +577,9 @@ async fn when_the_entry_in_use_dies_the_peer_is_reached_through_the_other_entry(
 }
 
 /// An entry that was Connected (a valid frame was seen on it) and then goes quiet stays Connected for as long as the connection
-/// holds: quiet is not "the passphrase does not match".
+/// holds: quiet is not a state of its own.
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-async fn a_quiet_entry_that_was_connected_never_becomes_a_mismatch() {
+async fn a_quiet_entry_that_was_connected_stays_connected_or_nothing_heard() {
     let p1 = free_port();
     // Not chatty: it announces nothing of its own, so after B's one announce nothing more crosses.
     let _s1 = StandIn::server(p1, Some((NAME1, PASS1)), false);
@@ -546,15 +590,15 @@ async fn a_quiet_entry_that_was_connected_never_becomes_a_mismatch() {
     let end = Instant::now() + Duration::from_secs(62);
     while Instant::now() < end {
         let s = state_of(&a, "e1");
-        assert!(matches!(s, Some(EntryState::Connected | EntryState::NothingHeard)), "quiet after Connected is never Mismatch: {s:?}");
+        assert!(matches!(s, Some(EntryState::Connected | EntryState::NothingHeard)), "a quiet entry that was Connected is never a state of its own: {s:?}");
         tokio::time::sleep(Duration::from_millis(500)).await;
     }
 }
 
 /// The memory is per connection: an entry whose connection dropped and came back is judged afresh (nothing heard, then Connected when
-/// a frame comes), and never Mismatch while frames are valid.
+/// a frame comes).
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-async fn an_entry_that_drops_and_returns_is_judged_afresh_and_is_never_a_mismatch() {
+async fn an_entry_that_drops_and_returns_is_judged_afresh() {
     let p1 = free_port();
     let mut s1 = StandIn::server(p1, Some((NAME1, PASS1)), true);
     let ka = SecretKey::generate();
@@ -567,7 +611,6 @@ async fn an_entry_that_drops_and_returns_is_judged_afresh_and_is_never_a_mismatc
     let mut back = false;
     while Instant::now() < end {
         let s = state_of(&a, "e1");
-        assert_ne!(s, Some(EntryState::Mismatch), "never a mismatch");
         if s == Some(EntryState::Connected) {
             back = true;
             break;
@@ -650,11 +693,8 @@ async fn real_rnsd_hub1() {
     assert_eq!(b.via(&ka.public()), Some(Via::Entry("b1".to_string())));
     println!("a: {:?}", a.entry_status().iter().map(|(i, s, _)| (i.clone(), *s)).collect::<Vec<_>>());
     println!("b: {:?}", b.entry_status().iter().map(|(i, s, _)| (i.clone(), *s)).collect::<Vec<_>>());
-    // The wrong passphrase: no path, and the state says so (inferred when bytes arrive, "nothing heard yet" when none do).
-    until("w settles", 60, || {
-        matches!(state_of(&w, "w1"), Some(EntryState::Mismatch | EntryState::NothingHeard))
-    })
-    .await;
+    // The wrong passphrase: no path, and the state is "nothing heard yet" (Cache cannot tell it from a quiet rnsd).
+    until("w settles", 60, || state_of(&w, "w1") == Some(EntryState::NothingHeard)).await;
     tokio::time::sleep(Duration::from_secs(35)).await;
     println!("w (wrong passphrase): {:?}", w.entry_status().iter().map(|(i, s, _)| (i.clone(), *s)).collect::<Vec<_>>());
     assert!(!w.reachable(&ka.public()) && !w.reachable(&kb.public()), "no path through a wrong passphrase");

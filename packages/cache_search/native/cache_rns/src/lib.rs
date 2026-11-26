@@ -74,8 +74,6 @@ const PATH_EVERY: Duration = Duration::from_secs(5);
 pub const ENTRY_ANNOUNCE_EVERY: Duration = Duration::from_secs(6 * 60 * 60);
 /// An entry point that is not connected for this long is [`EntryState::NotAnswering`].
 pub const NOT_ANSWERING_AFTER: Duration = Duration::from_secs(20);
-/// An entry point connected this long with bytes arriving but no valid frame is [`EntryState::Mismatch`].
-pub const MISMATCH_AFTER: Duration = Duration::from_secs(30);
 /// At least this long between two re-announces made because an interface dropped (node-wide), so a flapping interface cannot spam
 /// anyone's rnsd.
 pub const DROP_REANNOUNCE_GAP: Duration = Duration::from_secs(30);
@@ -247,10 +245,10 @@ pub enum EntryState {
     Connected,
     /// Reconnecting, failed or disconnected for more than [`NOT_ANSWERING_AFTER`].
     NotAnswering,
-    /// Inferred, not read: connected, bytes arrive, but none has been a valid frame for [`MISMATCH_AFTER`]. The network name or
-    /// passphrase most likely does not match (Prns drops a frame that fails IFAC without a counter or event; see the plan, decision 2).
-    Mismatch,
-    /// Connected, but nothing at all has been heard yet: a quiet rnsd, or one that answers a wrong passphrase with silence.
+    // There is no "network name or passphrase doesn't match" state. It returns only with an upstream Prns counter of inbound IFAC
+    // failures per interface (the plan, decision 2, option A). Inferring it from bytes with no valid frame fired for the right
+    // passphrase on a quiet rnsd (it echoes a frame back), so it was dropped (2026-11-25).
+    /// Connected, but no valid frame has arrived yet: a quiet rnsd, or one that answers a wrong passphrase with silence or noise.
     /// Cache cannot tell which.
     NothingHeard,
 }
@@ -1800,10 +1798,6 @@ struct Tracker {
     conn: Option<ConnectionState>,
     /// Since when it has not been Connected (first seen, from attach on).
     not_connected_since: Option<std::time::Instant>,
-    connected_since: Option<std::time::Instant>,
-    /// Receive counter when this connection was first seen up, and now.
-    rx_base: u64,
-    rx_now: u64,
     /// A valid frame has arrived on this attachment (it passed IFAC and parsed: an announce was heard, or a route or link exists).
     valid: bool,
     announced_at: Option<std::time::Instant>,
@@ -1830,10 +1824,6 @@ fn judge(slot: &Slot, now: std::time::Instant) -> EntryState {
         Some(ConnectionState::Connected | ConnectionState::Degraded) => {
             if t.valid {
                 EntryState::Connected
-            } else if t.rx_now > t.rx_base
-                && t.connected_since.is_some_and(|c| now.duration_since(c) >= MISMATCH_AFTER)
-            {
-                EntryState::Mismatch
             } else {
                 EntryState::NothingHeard
             }
@@ -1871,15 +1861,12 @@ fn observe_entries(handle: &PrnsNodeHandle, state: &Arc<Mutex<State>>) {
             t.lost_pending = true;
         }
         t.conn = Some(sn.connection);
-        t.rx_now = sn.rx_bytes;
         if sn.destinations > 0 || sn.links > 0 {
             t.valid = true;
         }
         if connected {
             t.not_connected_since = None;
             if !was_connected {
-                t.connected_since = Some(now);
-                t.rx_base = sn.rx_bytes;
                 t.up_pending = true;
                 t.announced_at = Some(now);
             } else if t.announced_at.is_some_and(|a| now.duration_since(a) >= ENTRY_ANNOUNCE_EVERY) {
@@ -1887,7 +1874,6 @@ fn observe_entries(handle: &PrnsNodeHandle, state: &Arc<Mutex<State>>) {
                 t.announced_at = Some(now);
             }
         } else {
-            t.connected_since = None;
             if t.not_connected_since.is_none() {
                 t.not_connected_since = Some(now);
             }

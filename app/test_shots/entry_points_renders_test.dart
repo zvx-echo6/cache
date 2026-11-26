@@ -1,6 +1,6 @@
 // Step 4's pages as the app draws them, 390 points wide, light and dark, with sample data (example hosts only): Sharing and sync (this
 // device, how each device is connected, the Ways to connect row), Ways to connect (with entry points, and empty), an entry point's page
-// in each state (connected, not answering, network name or passphrase doesn't match, nothing heard yet, off), the add form (empty, and
+// in each state (connected, not answering, nothing heard yet, off), the add form (empty, and
 // with its checks), the Remove confirm, the file limit choices, and a device's page through an entry point and on a slow link with
 // what waits for a faster connection. Each page is pushed over a first page, so it shows the back arrow. The page is as tall as it needs to be, so each picture shows all of it.
 // flutter test test_shots/entry_points_renders_test.dart --update-goldens  (pictures in test_shots/entry_points/)
@@ -140,7 +140,6 @@ void main() {
   shot('02c-ways-to-connect-other-states', (s, _) => WaysToConnectPage(sharing: s), height: 1100, prepare: (sync) {
     sync
       ..addEntry('d', 'quiet.example.net', 4242, status: 'nothing_heard')
-      ..addEntry('e', 'private.example.net', 4242, private: true, network: 'x', pass: true, status: 'mismatch')
       ..addEntry('f', 'new.example.net', 4242, status: 'connecting');
   });
 
@@ -162,7 +161,6 @@ void main() {
 
   entryShot('03-entry-point-connected', 'connected', through: 3);
   entryShot('03b-entry-point-not-answering', 'not_answering');
-  entryShot('03c-entry-point-mismatch', 'mismatch');
   entryShot('03d-entry-point-nothing-heard', 'nothing_heard');
   entryShot('03e-entry-point-off', 'off', on: false);
 
