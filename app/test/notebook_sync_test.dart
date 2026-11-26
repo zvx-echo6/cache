@@ -871,6 +871,113 @@ void main() {
     test('R1-delete: the marker goes out one scan ahead of the file removal and the other device fetches in between: X stays deleted on both and the marker stays', () async {
       await r1Delete(removalAfterMarker: true);
     });
+
+    // Seen on two emulators 2026-11-25 (cache-status/verification/notebook-delete-travels-2026-11-25, steps 3 and 3b): B is
+    // offline and edits X; A deletes X. On a phone, saving the edit runs B's own pass within about 2 s, offline too, so B's
+    // file holds the edit and B's record is up to date before the marker arrives. The edit then looks unchanged since the
+    // last sync, and the marker deletes it, whichever came later. The rule wanted: the later action wins. Each device has
+    // its own clock here (the edit's pass runs at the edit's time, the delete's pass at the delete's time), and the share
+    // sync is modelled per path with versions in the order things happened (as in R1 above).
+    Future<void> offlineEditVsDelete({required bool editLater}) async {
+      final (a, b, nb, ids) = await pair();
+      final x = ids[0];
+      final mk = '_deleted/$x.json';
+      final tDelete = DateTime(2026, 11, 25, 16, 58, 5);
+      final tEdit = editLater ? tDelete.add(const Duration(seconds: 46)) : tDelete.subtract(const Duration(seconds: 23));
+      final now = {a: tDelete, b: tEdit};
+      NotebookSync engine(_Rig r) => NotebookSync(
+          notebook: r.nb, kind: SyncKind.share, folder: r.folder, stateFile: r.state, includePrivate: true, clock: () => now[r]!, templates: () async => builtInTemplates());
+
+      var ver = 0;
+      final index = {a: <String, (String?, int)>{}, b: <String, (String?, int)>{}};
+      void scan(_Rig r) {
+        final idx = index[r]!;
+        for (final e in r.folder.text.entries) {
+          if (hidden(e.key)) continue;
+          if (idx[e.key]?.$1 != e.value) idx[e.key] = (e.value, ++ver);
+        }
+        for (final p in [for (final x in idx.entries) if (x.value.$1 != null && !r.folder.text.containsKey(x.key)) x.key]) {
+          idx[p] = (null, ++ver);
+        }
+      }
+
+      void fetch(_Rig to, _Rig from) {
+        for (final e in index[from]!.entries) {
+          if ((index[to]![e.key]?.$2 ?? 0) >= e.value.$2) continue;
+          index[to]![e.key] = e.value;
+          if (e.value.$1 == null) {
+            to.folder.text.remove(e.key);
+          } else {
+            to.folder.text[e.key] = e.value.$1!;
+          }
+        }
+      }
+
+      scan(a);
+      fetch(b, a);
+      scan(b);
+
+      // B, offline: the edit, then B's own pass at once (as on a phone), and B's share lists the changed file.
+      Future<void> editOnB() async {
+        final e = (await b.nb.entry(x))!;
+        await b.nb.saveEntry(id: x, notebookId: nb, occurredAt: e.occurredAt, title: e.title, body: 'edited on B');
+        await engine(b).run();
+        scan(b);
+        expect(b.folder.text.values.any((t) => t.contains('edited on B')), isTrue, reason: 'B\'s own pass wrote the edit to its share file');
+      }
+
+      // A: the delete, A's pass (marker written, file removed), and A's share lists both.
+      Future<void> deleteOnA() async {
+        await a.nb.deleteEntry(x);
+        await engine(a).run();
+        scan(a);
+        expect(marks(a), [mk]);
+        expect((jsonDecode(a.folder.text[mk]!) as Map)['at'], tDelete.millisecondsSinceEpoch);
+      }
+
+      if (editLater) {
+        await deleteOnA();
+        await editOnB();
+      } else {
+        await editOnB();
+        await deleteOnA();
+      }
+
+      // B reconnects: both ways, a few rounds, both clocks after both actions.
+      final later = (editLater ? tEdit : tDelete).add(const Duration(minutes: 1));
+      for (var k = 0; k < 4; k++) {
+        now[a] = now[b] = later.add(Duration(minutes: k));
+        fetch(b, a);
+        fetch(a, b);
+        await engine(b).run();
+        scan(b);
+        fetch(a, b);
+        await engine(a).run();
+        scan(a);
+      }
+
+      Future<String> state(String name, _Rig r) async {
+        final e = await r.nb.entry(x);
+        return '$name: X ${e == null ? 'gone' : 'kept (${e.body})'}, other ${await r.nb.entry(ids[1]) == null ? 'gone' : 'kept'}, '
+            'marker ${marks(r).contains(mk) ? 'there' : 'removed'}';
+      }
+
+      expect(
+          [await state('A', a), await state('B', b)],
+          editLater
+              ? ['A: X kept (edited on B), other kept, marker removed', 'B: X kept (edited on B), other kept, marker removed']
+              : ['A: X gone, other kept, marker there', 'B: X gone, other kept, marker there'],
+          reason: 'the later action wins: ${editLater ? 'B\'s edit, 46 s after the delete' : 'A\'s delete, 23 s after B\'s edit'}');
+    }
+
+    // Expected to FAIL on main today (2026-11-25): the marker deletes B's later edit (the device symptom, X gone on both).
+    test('offline edit vs delete, the edit is later: B\'s edit, already in its own share file, survives on both and the marker is removed', () async {
+      await offlineEditVsDelete(editLater: true);
+    });
+
+    test('offline edit vs delete, the delete is later: X is gone on both and the marker stays', () async {
+      await offlineEditVsDelete(editLater: false);
+    });
   });
 
   group('both devices changed the same words: the other version is kept as a new entry, nothing is asked', () {
