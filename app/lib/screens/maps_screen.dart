@@ -26,6 +26,7 @@ import '../maps/style/protomaps_layout.dart' show poiFilterAfterChips, poiLayerI
 import '../maps/style/style_generator.dart';
 import '../maps/ui/area_draw.dart';
 import '../maps/stack/icon_groups.dart';
+import '../maps/stack/label_nudge.dart';
 import '../maps/stack/stack_fan.dart';
 import '../maps/stack/stack_images.dart';
 import '../regions/area_lookup.dart' show AreaFetcher, AreaHit, AreaSource, pointInGeometry;
@@ -896,6 +897,10 @@ class _MapsScreenState extends State<MapsScreen> with SingleTickerProviderStateM
     // The new style has none of the group markers or the pictures: made again for the groups now.
     _stackSig = '';
     _stackGroups = const [];
+    _markerAt = {};
+    _pinNudgedAt = {};
+    _nudgeSig = '';
+    _markerImgs.clear();
     _nbPinsFiltered = false;
     _discPngs.clear();
     await _updateStacks();
@@ -1127,26 +1132,27 @@ class _MapsScreenState extends State<MapsScreen> with SingleTickerProviderStateM
     if (c == null || !_styleReady || !mounted) return;
     final groups = groupIcons(_stackIcons(), diameter: _stackDiameter(), markerDiameter: _markerDiameter(), previous: _stackGroups);
     final sig = groups.map((g) => g.key).join(';');
-    if (sig == _stackSig) return;
+    if (sig == _stackSig) {
+      // The same groups: the camera may have moved the names, so the nudges are worked out again (on idle only).
+      await _applyNudges();
+      return;
+    }
     _stackSig = sig;
     _stackGroups = groups;
+    _markerAt = {};
+    _nudgeSig = '';
     if (_fan != null && !groups.any((g) => g.key == _fan!.key)) _foldFan();
     final images = _pinImages;
     final p = _palette;
     final ratio = images?.ratio ?? 3;
-    final features = <Map<String, dynamic>>[];
     try {
       for (final g in groups) {
         final road = g.members.where((m) => m.kind == StackKind.roadEvent).firstOrNull;
         final name = 'stack-${g.kind.name}-${g.badge}${g.kind == StackKind.roadEvent ? '-${_roadKindOf(road)?.name}' : ''}';
         await images?.ensureNamed(name, () => renderStackMarkerPng(g.kind, g.badge, p, road: _roadKindOf(road) ?? RoadEventKind.work, ratio: ratio));
-        features.add({
-          'type': 'Feature',
-          'geometry': {'type': 'Point', 'coordinates': [g.lon, g.lat]},
-          'properties': {'img': name, 'gkey': g.key},
-        });
+        _markerImgs[g.key] = name;
       }
-      await c.setGeoJsonSource(kStackSource, {'type': 'FeatureCollection', 'features': features});
+      await _writeMarkers();
       final keys = [for (final g in groups) for (final m in g.members) if (m.id.startsWith('repeater:')) m.id.substring('repeater:'.length)];
       final ids = [for (final g in groups) for (final m in g.members) if (m.kind == StackKind.roadEvent) m.id.substring('road:'.length)];
       await c.setFilter(kUserRepeaters, userRepeatersFilter(keys));
@@ -1156,6 +1162,124 @@ class _MapsScreenState extends State<MapsScreen> with SingleTickerProviderStateM
         _nbPinsFiltered = pinIds.isNotEmpty;
         await c.setFilter(kNotebookPins, notebookPinsFilter(pinIds));
       }
+    } catch (_) {}
+    await _applyNudges();
+  }
+
+  // ---- nudged off town names (feat/nudge-off-names) -----------------------------------------------------------
+
+  /// Where a group marker is drawn when it was nudged off a town's name (by the group's key), and the same for a saved-place pin (by
+  /// its entry id). The true points stay in the groups and entries: the fan's leader lines go to those.
+  Map<String, LatLng> _markerAt = {};
+  Map<String, LatLng> _pinNudgedAt = {};
+  final Map<String, String> _markerImgs = {};
+  String _nudgeSig = '';
+
+  /// Draws the group markers, each at its nudged point if it has one.
+  Future<void> _writeMarkers() async {
+    final c = _controller;
+    if (c == null) return;
+    final features = <Map<String, dynamic>>[
+      for (final g in _stackGroups)
+        if (_markerImgs[g.key] != null)
+          {
+            'type': 'Feature',
+            'geometry': {'type': 'Point', 'coordinates': [(_markerAt[g.key]?.longitude ?? g.lon), (_markerAt[g.key]?.latitude ?? g.lat)]},
+            'properties': {'img': _markerImgs[g.key], 'gkey': g.key},
+          },
+    ];
+    await c.setGeoJsonSource(kStackSource, {'type': 'FeatureCollection', 'features': features});
+  }
+
+  /// The notebook pins' GeoJSON, with the pins that stepped aside at their nudged points.
+  Map<String, dynamic> _pinsGeoJson() {
+    final gj = notebookPinsGeoJson(_pins, pinImages: _pinNames);
+    if (_pinNudgedAt.isEmpty) return gj;
+    for (final f in gj['features'] as List) {
+      final m = f as Map<String, dynamic>;
+      final at = _pinNudgedAt[(m['properties'] as Map)['entry']];
+      if (at != null) (m['geometry'] as Map)['coordinates'] = [at.longitude, at.latitude];
+    }
+    return gj;
+  }
+
+  /// The boxes of the city and town names the map drew, in points (the query gives each name's point; the text box is estimated).
+  Future<List<Rect>> _townNameBoxes(MapLibreMapController c, NudgeCamera cam, double ratio) async {
+    final found = await c.queryRenderedFeaturesInRect(Rect.fromLTWH(0, 0, _mapSize.width * ratio, _mapSize.height * ratio), kTownNameLayerIds, null);
+    final seen = <String>{};
+    final out = <Rect>[];
+    for (final f in found) {
+      if (f is! Map) continue;
+      final props = f['properties'], geo = f['geometry'];
+      final name = props is Map ? props['name'] : null;
+      final coords = geo is Map ? geo['coordinates'] : null;
+      if (name is! String || name.isEmpty || coords is! List || coords.length < 2 || geo['type'] != 'Point') continue;
+      final at = cam.project((coords[1] as num).toDouble(), (coords[0] as num).toDouble());
+      if (!seen.add('$name@${at.dx.round()},${at.dy.round()}')) continue;
+      out.add(labelBox(name, at));
+    }
+    return out;
+  }
+
+  /// On camera idle (and when the groups or pins change): a group marker (and, zoomed out, a saved-place pin) that sits on a city's or
+  /// town's name is moved clear of it. Cheap: one rect query for the names, one projection call, then plain maths.
+  Future<void> _applyNudges() async {
+    final c = _controller;
+    if (c == null || !_styleReady || !mounted || _mapSize.isEmpty) return;
+    final markerAt = <String, LatLng>{}, pinAt = <String, LatLng>{};
+    try {
+      final pinsToo = _zoom < kNudgePinsBelowZoom && _pins.isNotEmpty;
+      if (_stackGroups.isNotEmpty || pinsToo) {
+        final ratio = plat.isAndroid ? MediaQuery.devicePixelRatioOf(context) : 1.0;
+        final centre = await c.toScreenLocation(LatLng(_lat, _lon));
+        final cam = NudgeCamera(centreScreen: Offset(centre.x / ratio, centre.y / ratio), lat: _lat, lon: _lon, zoom: _zoom, bearing: _bearing);
+        final labels = await _townNameBoxes(c, cam, ratio);
+        if (labels.isNotEmpty) {
+          final items = <String, Rect>{};
+          final at = <String, Offset>{};
+          final md = _markerDiameter();
+          for (final g in _stackGroups) {
+            final p = cam.project(g.lat, g.lon);
+            // What a tap reaches (its disc and badge, each 44 points at the least) must clear the name too.
+            Rect? r;
+            for (final k in markerCircles(p.dx, p.dy, g.count, md)) {
+              final one = Rect.fromCircle(center: Offset(k.x, k.y), radius: math.max(kStackTargetMin / 2, k.r));
+              r = r == null ? one : r.expandToInclude(one);
+            }
+            items['m:${g.key}'] = r!;
+            at['m:${g.key}'] = p;
+          }
+          if (pinsToo) {
+            final grouped = {for (final g in _stackGroups) for (final m in g.members) if (m.id.startsWith('nbpin:')) m.id.substring('nbpin:'.length)};
+            final side = kFanDisc * iconScaleAt(_zoom) + 6;
+            for (final e in _pins) {
+              final pl = e.place;
+              if (pl == null || grouped.contains(e.id)) continue;
+              final p = cam.project(pl.lat, pl.lon);
+              items['p:${e.id}'] = Rect.fromCenter(center: p, width: side, height: side);
+              at['p:${e.id}'] = p;
+            }
+          }
+          final moves = nudgeOffLabels(items: items, labels: labels, viewport: Offset.zero & _mapSize);
+          for (final e in moves.entries) {
+            final (la, lo) = cam.unproject(at[e.key]! + e.value);
+            if (e.key.startsWith('m:')) {
+              markerAt[e.key.substring(2)] = LatLng(la, lo);
+            } else {
+              pinAt[e.key.substring(2)] = LatLng(la, lo);
+            }
+          }
+        }
+      }
+      String sig(Map<String, LatLng> m) => (m.entries.toList()..sort((a, b) => a.key.compareTo(b.key))).map((e) => '${e.key}:${e.value.latitude.toStringAsFixed(6)},${e.value.longitude.toStringAsFixed(6)}').join(';');
+      final next = '${sig(markerAt)}|${sig(pinAt)}';
+      if (next == _nudgeSig) return;
+      final markersChanged = sig(markerAt) != sig(_markerAt), pinsChanged = sig(pinAt) != sig(_pinNudgedAt);
+      _nudgeSig = next;
+      _markerAt = markerAt;
+      _pinNudgedAt = pinAt;
+      if (markersChanged) await _writeMarkers();
+      if (pinsChanged) await c.setGeoJsonSource(kNotebookSource, _pinsGeoJson());
     } catch (_) {}
   }
 
@@ -1177,7 +1301,7 @@ class _MapsScreenState extends State<MapsScreen> with SingleTickerProviderStateM
       IconGroup? best;
       var bestD = double.infinity;
       for (final g in _stackGroups) {
-        final p = await c.toScreenLocation(LatLng(g.lat, g.lon));
+        final p = await c.toScreenLocation(_markerAt[g.key] ?? LatLng(g.lat, g.lon));
         final cx = p.x / ratio, cy = p.y / ratio;
         for (final (i, k) in markerCircles(0, 0, g.count, md).indexed) {
           final px = cx + k.x, py = cy + k.y;
@@ -1971,7 +2095,7 @@ class _MapsScreenState extends State<MapsScreen> with SingleTickerProviderStateM
         }
       }
       _pinNames = names;
-      await c.setGeoJsonSource(kNotebookSource, notebookPinsGeoJson(_pins, pinImages: names));
+      await c.setGeoJsonSource(kNotebookSource, _pinsGeoJson());
       unawaited(_updateStacks());
       // The chosen place's pin may be one of these entries: drawn again now that they are known.
       _navSig = null;

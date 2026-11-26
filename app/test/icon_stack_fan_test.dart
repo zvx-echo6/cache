@@ -138,6 +138,21 @@ class _Maps {
     camera.hits.clear();
   }
 
+  /// A town name the map drew at [_lat], [_lon] (the fake's query answers by layer).
+  void townAt(String name, {double lat = _lat, double lon = _lon}) {
+    camera.hits['places_locality'] = [
+      {'type': 'Feature', 'geometry': {'type': 'Point', 'coordinates': [lon, lat]}, 'properties': {'name': name}},
+    ];
+  }
+
+  /// Where the fake map shows a point.
+  Offset screenOfLL(double lat, double lon) {
+    final p = camera.screenOf!(LatLng(lat, lon));
+    return Offset(p.x.toDouble(), p.y.toDouble());
+  }
+
+  List<double> coordsOf(Map<String, dynamic> feature) => ((feature['geometry'] as Map)['coordinates'] as List).cast<double>();
+
   Future<void> finish(WidgetTester tester) async {
     await tester.pumpWidget(const SizedBox.shrink());
     MapLibrePlatform.createInstance = _platform;
@@ -329,6 +344,78 @@ void main() {
     }
     await m.tapMarker(tester);
     expect(fan, findsOneWidget);
+    await m.finish(tester);
+  });
+
+  testWidgets('a group marker on a town\'s name is nudged clear of it: a tap on the name does not open the fan, a tap on the marker does; the true point stays for the fan', (tester) async {
+    final m = _Maps();
+    await m.pump(tester, near);
+    final trueLat = _lat, trueLon = _lon + 0.0002; // the three average here
+    expect(m.markers, hasLength(1));
+    var c = m.coordsOf(m.markers.single);
+    expect(c[0], closeTo(trueLon, 1e-9), reason: 'no name: no move');
+    // A name is drawn right there: on camera idle the marker steps aside.
+    m.townAt('Boise');
+    m.map.onCameraIdle!();
+    await m.settle(tester);
+    c = m.coordsOf(m.markers.single);
+    final drawn = m.screenOfLL(c[1], c[0]);
+    final truth = m.screenOfLL(trueLat, trueLon);
+    expect((drawn - truth).distance, greaterThan(20), reason: 'moved clear of the name');
+    // A tap on the name's text (195, 400): the marker is not there (the map's query finds none), and its tap target is clear of the name.
+    m.map.onMapClick!(const math.Point<double>(195, 400), const LatLng(_lat, _lon));
+    await m.settle(tester);
+    expect(fan, findsNothing, reason: 'the name stays tappable');
+    // A tap on the marker where it is drawn opens the fan, which is made around the true point.
+    m.camera.hits[kStackMarkers] = [m.markers.single];
+    m.map.onMapClick!(math.Point<double>(drawn.dx, drawn.dy), LatLng(c[1], c[0]));
+    await m.settle(tester);
+    expect(fan, findsOneWidget);
+    await m.finish(tester);
+  });
+
+  testWidgets('a pin steps aside off a town\'s name only zoomed out; zoomed in it stays exactly where it is, and a tap on it opens its card', (tester) async {
+    final m = _Maps();
+    final nb = fakeNotebook(FakeNotebookBackend(journal: false));
+    late String entryId;
+    await tester.runAsync(() async {
+      await nb.start();
+      final places = await nb.saveNotebook(template: 'places', def: const NotebookDef(name: 'Trailheads', fields: [], icon: 'star', color: 'teal'), map: true);
+      final e = await nb.saveEntry(notebookId: places.id, occurredAt: '2026-11-12T12:00:00Z', title: 'Camp', place: const NbPlace(lat: _lat, lon: _lon));
+      entryId = e.id;
+    });
+    await m.pump(tester, const [], notebooks: nb);
+    await m.settle(tester, turns: 14);
+    List<double> pin() {
+      final f = ((m.camera.sources[kNotebookSource]?['features'] as List).cast<Map<String, dynamic>>()).firstWhere((f) => (f['properties'] as Map)['entry'] == entryId);
+      return m.coordsOf(f);
+    }
+
+    m.townAt('Boise');
+    m.map.onCameraIdle!();
+    await m.settle(tester);
+    expect(pin(), [_lon, _lat], reason: 'zoom 14: the pin stays exactly in place');
+    // Zoomed out (below 10) the pin steps aside; it stays one pin, on top, in the notebook's own layer.
+    m.map.onCameraMove!(const CameraPosition(target: LatLng(_lat, _lon), zoom: 8));
+    m.map.onCameraIdle!();
+    await m.settle(tester);
+    final out = pin();
+    expect(out[0] != _lon || out[1] != _lat, isTrue, reason: 'zoom 8: nudged');
+    // Back in: exactly in place again.
+    m.map.onCameraMove!(const CameraPosition(target: LatLng(_lat, _lon), zoom: 14));
+    m.map.onCameraIdle!();
+    await m.settle(tester);
+    expect(pin(), [_lon, _lat]);
+    // A tap on a nudged pin opens its card (the map's query finds the pin where it is drawn).
+    m.map.onCameraMove!(const CameraPosition(target: LatLng(_lat, _lon), zoom: 8));
+    m.map.onCameraIdle!();
+    await m.settle(tester);
+    m.camera.hits[kNotebookPins] = [
+      {'properties': {'entry': entryId, 'notebook': 'x', 'title': 'Camp'}},
+    ];
+    m.map.onMapClick!(const math.Point<double>(150, 380), const LatLng(_lat, _lon));
+    await m.settle(tester);
+    expect(find.byType(NotebookPinSheet), findsOneWidget);
     await m.finish(tester);
   });
 
