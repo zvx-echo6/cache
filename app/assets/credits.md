@@ -27,6 +27,8 @@ No data, library content or language model ships inside Cache. The maps, library
 
 ## Native libraries and tools
 
+- Prns Android BLE adapter: adapted from personal-hopspot/mobile/android at Prns v0.3.8-hotfix.1, commit 92a9613fd3fa2cdd827f2e222f65d4a305360463. Copyright (c) 2026 The Prns Authors; used under the MIT license, retained in third_party/prns_android/LICENSE-MIT. https://github.com/KenAKAFrosty/Prns
+
 - llama.cpp and ggml (the model runner): MIT, Copyright the ggml authors. https://github.com/ggml-org/llama.cpp
 - libzim 9.8.2 (reads ZIM files): GPL-2.0-or-later, openZIM. Source: https://github.com/openzim/libzim
 - Xapian 1.4 (the full-text index inside libzim): GPL-2.0-or-later. Source: https://xapian.org
