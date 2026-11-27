@@ -70,12 +70,21 @@ struct Rns {
     node: Arc<RnsNode>,
     dest_hex: String,
     sig_hex: String,
+    ip_at_launch: bool,
+}
+
+#[cfg(any(target_os = "android", target_os = "ios", feature = "bluetooth"))]
+#[derive(Default)]
+struct MobileBluetooth {
+    wanted: bool,
+    session: Option<cache_rns::bluetooth::MobileSession>,
 }
 
 /// iroh with Reticulum beside it.
 pub struct MultiTransport {
     iroh: Arc<IrohTransport>,
     rns: RwLock<Option<Rns>>,
+    restart_gate: tokio::sync::Mutex<()>,
     /// What the node was started with, to start it again (a used-up Nearby pairing pool).
     start_args: Mutex<Option<StartArgs>>,
     /// Linked devices (iroh ids) and the Reticulum destination of each, when known (hex).
@@ -91,6 +100,8 @@ pub struct MultiTransport {
     entry_caps: Mutex<Vec<(String, u64)>>,
     /// How long a link may go without a measurement before the next request is preceded by a small one, in ms (u64::MAX: the node's own).
     probe_ms: AtomicU64,
+    #[cfg(any(target_os = "android", target_os = "ios", feature = "bluetooth"))]
+    bluetooth: Mutex<MobileBluetooth>,
 }
 
 /// An entry point as the node takes it (the passphrase in a string that is wiped when dropped).
@@ -109,6 +120,7 @@ pub(crate) fn to_rns(e: &EntryPoint) -> cache_rns::EntryPoint {
 fn via_name(node: &RnsNode, key: &PublicKey) -> String {
     match node.via(key) {
         Some(Via::Wifi) => "wifi".into(),
+        Some(Via::Bluetooth) => "bluetooth".into(),
         Some(Via::Entry(id)) => format!("entry:{id}"),
         _ => "reticulum".into(),
     }
@@ -146,7 +158,14 @@ fn unhex(s: &str) -> Option<Vec<u8>> {
 impl MultiTransport {
     /// `peers`: the linked devices with the Reticulum destination saved for each.
     pub fn new(iroh: Arc<IrohTransport>, peers: impl IntoIterator<Item = (String, Option<String>)>) -> Arc<MultiTransport> {
-        Arc::new(MultiTransport { iroh, rns: RwLock::new(None), start_args: Mutex::new(None), peers: Mutex::new(peers.into_iter().collect()), last_via: Mutex::default(), former: Mutex::default(), reach_gap_ms: AtomicU64::new(0), entries: Mutex::default(), entry_caps: Mutex::default(), probe_ms: AtomicU64::new(u64::MAX) })
+        Arc::new(MultiTransport {
+            iroh, rns: RwLock::new(None), restart_gate: tokio::sync::Mutex::new(()),
+            start_args: Mutex::new(None), peers: Mutex::new(peers.into_iter().collect()),
+            last_via: Mutex::default(), former: Mutex::default(), reach_gap_ms: AtomicU64::new(0), entries: Mutex::default(),
+            entry_caps: Mutex::default(), probe_ms: AtomicU64::new(u64::MAX),
+            #[cfg(any(target_os = "android", target_os = "ios", feature = "bluetooth"))]
+            bluetooth: Mutex::default(),
+        })
     }
 
     /// Starts the Reticulum node (after the store has opened): the linked devices and their saved destinations, then the
@@ -161,9 +180,11 @@ impl MultiTransport {
 
     async fn launch(&self) -> Result<()> {
         let a = self.start_args.lock().unwrap().clone().ok_or_else(|| anyhow!("Reticulum was not set up"))?;
+        let ip_at_launch = self.iroh.ip_allowed();
         let cfg = RnsConfig {
             device: a.device.clone(),
-            interfaces: a.interfaces.iter().cloned().chain(self.entries.lock().unwrap().iter().filter(|e| e.on).cloned().map(Iface::Entry)).collect(),
+            interfaces: a.interfaces.iter().filter(|i| ip_at_launch || !i.uses_ip()).cloned()
+                .chain(self.entries.lock().unwrap().iter().filter(|e| e.on && ip_at_launch).cloned().map(Iface::Entry)).collect(),
             peers: self.peer_list(),
             wifi_group: None,
             paths: vec![PATH_INDEX.into(), PATH_SECRETS.into(), PATH_PAIR.into(), PATH_SUMMARY.into(), PATH_DIFF.into(), PATH_NOTICE.into(), PATH_ENTRIES.into()],
@@ -183,13 +204,17 @@ impl MultiTransport {
             node.speeds().set_probe_every(Duration::from_millis(ms));
         }
         let sig = cache_rns::vouch_destination(&a.device, &dest);
-        *self.rns.write().unwrap() = Some(Rns { node, dest_hex: cache_rns::dest_hex(&dest), sig_hex: hex(&sig) });
+        *self.rns.write().unwrap() = Some(Rns { node, dest_hex: cache_rns::dest_hex(&dest), sig_hex: hex(&sig), ip_at_launch });
         Ok(())
     }
 
     /// Builds the Reticulum node again, with a fresh pairing pool (the old one is used up). Sync links drop and come back;
     /// iroh carries them meanwhile. The old node's listeners may take a moment to let go, so the start is retried.
     async fn restart(&self) -> Result<()> {
+        let _one = self.restart_gate.lock().await;
+        // Revoke old callbacks without changing the person's requested state. Stop during the await below must win.
+        #[cfg(any(target_os = "android", target_os = "ios", feature = "bluetooth"))]
+        self.bluetooth.lock().unwrap().session.take();
         if let Some(old) = self.rns.write().unwrap().take() {
             old.node.stop();
         }
@@ -197,7 +222,16 @@ impl MultiTransport {
         for _ in 0..30 {
             tokio::time::sleep(Duration::from_millis(200)).await;
             match self.launch().await {
-                Ok(()) => return Ok(()),
+                Ok(()) => {
+                    #[cfg(any(target_os = "android", target_os = "ios", feature = "bluetooth"))]
+                    {
+                        let mut state = self.bluetooth.lock().unwrap();
+                        if state.wanted {
+                            self.ensure_bluetooth(&mut state)?;
+                        }
+                    }
+                    return Ok(());
+                }
                 Err(e) => last = e,
             }
         }
@@ -217,7 +251,22 @@ impl MultiTransport {
     }
 
     fn node(&self) -> Option<Arc<RnsNode>> {
-        self.rns.read().unwrap().as_ref().map(|r| r.node.clone())
+        // Immediately stop new requests using a node that still owns IP interfaces, including while its replacement waits
+        // for the serialized restart. A local-only replacement becomes usable before permission is restored.
+        self.rns.read().unwrap().as_ref().filter(|r| !r.ip_at_launch || self.iroh.ip_allowed()).map(|r| r.node.clone())
+    }
+
+    #[cfg(any(target_os = "android", target_os = "ios", feature = "bluetooth"))]
+    fn ensure_bluetooth(&self, state: &mut MobileBluetooth) -> Result<u64> {
+        if let Some(session) = state.session.as_ref() {
+            return Ok(session.handle());
+        }
+        let node = self.node().ok_or_else(|| anyhow!("Reticulum is not running"))?;
+        let device = self.start_args.lock().unwrap().as_ref().ok_or_else(|| anyhow!("Reticulum was not set up"))?.device.clone();
+        let session = cache_rns::bluetooth::MobileSession::attach(&node, &device)?;
+        let handle = session.handle();
+        state.session = Some(session);
+        Ok(handle)
     }
 
     fn peer_list(&self) -> Vec<(PublicKey, Option<cache_rns::DestinationHash>)> {
@@ -510,7 +559,7 @@ impl Transport for MultiTransport {
         let caps: Vec<(String, u64)> = entries.iter().map(|e| (e.id.clone(), e.cap_bytes)).collect();
         *self.entry_caps.lock().unwrap() = caps.clone();
         if let Some(n) = self.node() {
-            n.set_entry_points(&all);
+            n.set_entry_points(if self.iroh.ip_allowed() { &all } else { &[] });
             n.set_entry_caps(&caps);
         }
     }
@@ -541,6 +590,55 @@ impl Transport for MultiTransport {
                 EntryStatus { id, state, checked }
             })
             .collect()
+    }
+
+    fn ip_allowed(&self) -> bool { self.iroh.ip_allowed() }
+
+    fn set_ip_allowed(&self, on: bool) -> BoxFut<'_, Result<()>> {
+        Box::pin(async move {
+            let changed = self.iroh.ip_allowed() != on;
+            self.iroh.set_ip_allowed(on).await?;
+            if changed && self.rns.read().unwrap().is_some() {
+                // Close old IP links as well as their routes. A new local-only node cannot reuse an IP link after permission
+                // changes, even if a Bluetooth announce for the same peer arrived meanwhile. Verified file pieces stay.
+                self.restart().await?;
+            }
+            Ok(())
+        })
+    }
+
+    #[cfg(any(target_os = "android", target_os = "ios", feature = "bluetooth"))]
+    fn bluetooth_start(&self) -> Result<u64> {
+        let mut state = self.bluetooth.lock().unwrap();
+        state.wanted = true;
+        self.ensure_bluetooth(&mut state)
+    }
+
+    #[cfg(any(target_os = "android", target_os = "ios", feature = "bluetooth"))]
+    fn bluetooth_stop(&self) {
+        let mut state = self.bluetooth.lock().unwrap();
+        state.wanted = false;
+        state.session.take();
+    }
+
+    #[cfg(any(target_os = "android", target_os = "ios", feature = "bluetooth"))]
+    fn bluetooth_handle(&self) -> Option<u64> {
+        self.bluetooth.lock().unwrap().session.as_ref().map(|s| s.handle())
+    }
+
+    #[cfg(any(target_os = "android", target_os = "ios", feature = "bluetooth"))]
+    fn bluetooth_peers(&self) -> usize {
+        self.bluetooth.lock().unwrap().session.as_ref().map_or(0, |s| s.peers())
+    }
+
+    #[cfg(any(target_os = "android", target_os = "ios", feature = "bluetooth"))]
+    fn bluetooth_ready(&self) -> Option<bool> {
+        self.bluetooth.lock().unwrap().session.as_ref().and_then(|s| s.ready())
+    }
+
+    #[cfg(any(target_os = "android", target_os = "ios", feature = "bluetooth"))]
+    fn bluetooth_error(&self) -> Option<String> {
+        self.bluetooth.lock().unwrap().session.as_ref().and_then(|s| s.error())
     }
 
     fn allow(&self, peer: &str) {
@@ -619,7 +717,9 @@ impl Transport for MultiTransport {
             .map(|n| n.pair_list())
             .unwrap_or_default()
             .into_iter()
-            .map(|d| json!({"id": d.id, "name": d.name, "kind": d.kind, "via": "wifi"}))
+            .map(|d| json!({"id": d.id, "name": d.name, "kind": d.kind, "via": match d.via {
+                Via::Wifi => "wifi", Via::Bluetooth => "bluetooth", _ => "reticulum",
+            }}))
             .collect();
         json!({"devices": devices})
     }
@@ -665,8 +765,9 @@ impl Transport for MultiTransport {
 
     fn shutdown(&self) -> BoxFut<'_, ()> {
         Box::pin(async move {
-            if let Some(n) = self.node() {
-                n.stop();
+            self.bluetooth_stop();
+            if let Some(rns) = self.rns.write().unwrap().take() {
+                rns.node.stop();
             }
             self.iroh.shutdown().await;
         })
@@ -872,6 +973,38 @@ impl Handler for Serving {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[cfg(feature = "bluetooth")]
+    #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+    async fn bluetooth_restart_replaces_callbacks_but_an_explicit_stop_wins() {
+        use std::future::Future;
+        let dir = tempfile::tempdir().unwrap();
+        let key = SecretKey::generate();
+        let bridge = crate::bridge::Bridge::new(dir.path().join("iroh-view"), Arc::default(), Arc::default());
+        let iroh = IrohTransport::bind(
+            iroh::Endpoint::builder(iroh::endpoint::presets::Minimal).secret_key(key.clone()),
+            [], Arc::new(crate::GateState::default()), bridge,
+        ).await.unwrap();
+        let client = MultiTransport::new(iroh, []);
+        let store = Store::open(&dir.path().join("store"), cache_store::Options::default()).unwrap();
+        client.start_rns(key, &store, Arc::new(Unreached), vec![], false).await.unwrap();
+        let first = client.bluetooth_start().unwrap();
+        client.restart().await.unwrap();
+        let second = client.bluetooth_handle().expect("requested Bluetooth is restored after the node restarts");
+        assert_ne!(first, second);
+        assert!(cache_rns::bluetooth::android_bridge(first).is_none());
+
+        let mut restarting = Box::pin(client.restart());
+        {
+            let mut context = std::task::Context::from_waker(std::task::Waker::noop());
+            assert!(restarting.as_mut().poll(&mut context).is_pending());
+        }
+        assert!(cache_rns::bluetooth::android_bridge(second).is_none(), "old callbacks revoked before restart's delay");
+        client.bluetooth_stop();
+        restarting.await.unwrap();
+        assert!(client.bluetooth_handle().is_none(), "an explicit stop during restart must not be undone");
+        client.shutdown().await;
+    }
 
     /// The engine's class and cache_rns's are two types (cache_rns is not built everywhere); they must say the same.
     #[test]

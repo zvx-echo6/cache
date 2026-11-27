@@ -1,5 +1,6 @@
 import AVFoundation
 import CarPlay
+import CoreBluetooth
 import Flutter
 import Darwin
 import MapLibre
@@ -11,10 +12,52 @@ import UserNotifications
 import flutter_local_notifications
 import workmanager_apple
 
+/// Permission and power UI only. Prns owns the restoration-aware data managers and all BLE packet traffic.
+private final class BluetoothAccess: NSObject, CBCentralManagerDelegate {
+  private var manager: CBCentralManager?
+  private var handle: Int64?
+
+  private func prepare() {
+    if manager == nil {
+      manager = CBCentralManager(delegate: self, queue: .main, options: [CBCentralManagerOptionShowPowerAlertKey: false])
+    }
+  }
+
+  func request() {
+    if CBManager.authorization == .denied || CBManager.authorization == .restricted {
+      if let settings = URL(string: UIApplication.openSettingsURLString) { UIApplication.shared.open(settings) }
+    } else {
+      prepare()
+    }
+  }
+
+  func status() -> [String: Any] {
+    let authorized = CBManager.authorization == .allowedAlways
+    // Polling an undecided permission must never create a manager and display a system prompt.
+    if authorized { prepare() }
+    let supported = manager?.state != .unsupported
+    let enabled = authorized && manager?.state == .poweredOn
+    if !enabled { handle = nil }
+    let selected: Any = handle.map { NSNumber(value: $0) as Any } ?? NSNull()
+    return ["supported": supported, "enabled": enabled, "missing_permissions": authorized ? [] : ["bluetooth"],
+            "handle": selected, "active": enabled && handle != nil]
+  }
+
+  func select(_ value: Int64) { handle = value }
+  func stop(expected: Int64?) {
+    if let expected, expected != handle { return }
+    handle = nil
+  }
+  func centralManagerDidUpdateState(_ central: CBCentralManager) {
+    if central.state != .poweredOn { handle = nil }
+  }
+}
+
 @main
 @objc class AppDelegate: FlutterAppDelegate {
   let folderAccess = FolderAccess()
   let routeSnapshot = RouteSnapshot()
+  private let bluetoothAccess = BluetoothAccess()
   /// The app's one Flutter engine. It is made by the first scene that needs it (obtainFlutterEngine), not by a storyboard's
   /// view controller, so that it does not belong to one window: a window is built around it (SceneDelegate.swift).
   private var flutterEngine: FlutterEngine?
@@ -49,7 +92,13 @@ import workmanager_apple
     }
     // Alert pop-ups are shown while the app is open too, and their taps reach Flutter.
     UNUserNotificationCenter.current().delegate = self as? UNUserNotificationCenterDelegate
-    return super.application(application, didFinishLaunchingWithOptions: launchOptions)
+    let launched = super.application(application, didFinishLaunchingWithOptions: launchOptions)
+    if launchOptions?[.bluetoothCentrals] != nil || launchOptions?[.bluetoothPeripherals] != nil {
+      // Give the existing Sharing startup a chance to recreate Prns's restoration-aware managers on a Bluetooth relaunch.
+      // Restoration/background delivery still requires real-device proof; no scene is required to start this engine.
+      _ = obtainFlutterEngine()
+    }
+    return launched
   }
 
   /// The app's Flutter engine: made, started and given its plugins and channels by the first caller, the same engine for
@@ -113,6 +162,31 @@ import workmanager_apple
       GeneratedPluginRegistrant.register(with: registry)
     }
     GeneratedPluginRegistrant.register(with: registry)
+    let bluetooth = FlutterMethodChannel(name: "co.cache/bluetooth", binaryMessenger: messenger)
+    bluetooth.setMethodCallHandler { [weak self] call, result in
+      guard let self else { result(nil); return }
+      switch call.method {
+      case "status": result(self.bluetoothAccess.status())
+      case "request_permissions":
+        guard UIApplication.shared.applicationState == .active else {
+          result(FlutterError(code: "bluetooth", message: "Open Cache to allow Bluetooth", details: nil)); return
+        }
+        self.bluetoothAccess.request()
+        result(self.bluetoothAccess.status())
+      case "start":
+        guard let args = call.arguments as? [String: Any], let handle = args["handle"] as? NSNumber,
+              handle.int64Value > 0, self.bluetoothAccess.status()["enabled"] as? Bool == true else {
+          result(FlutterError(code: "bluetooth", message: "Bluetooth permission and an enabled adapter are required", details: nil)); return
+        }
+        self.bluetoothAccess.select(handle.int64Value)
+        result(self.bluetoothAccess.status())
+      case "stop":
+        let args = call.arguments as? [String: Any]
+        self.bluetoothAccess.stop(expected: (args?["handle"] as? NSNumber)?.int64Value)
+        result(self.bluetoothAccess.status())
+      default: result(FlutterMethodNotImplemented)
+      }
+    }
     // Whether this build has the car screen, for Dart (lib/car/car_support.dart), which makes its car bridge only then.
     let build = FlutterMethodChannel(name: "cache/build", binaryMessenger: messenger)
     build.setMethodCallHandler { call, result in

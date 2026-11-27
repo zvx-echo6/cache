@@ -21,6 +21,7 @@ import com.happylittlellc.cache.car.GeoView
 import com.happylittlellc.cache.car.NavIntent
 import com.happylittlellc.cache.car.SharedEngine
 import com.happylittlellc.cache.fgs.FgsAddArm
+import com.happylittlellc.cache.reticulum.BlePlugin
 import io.flutter.plugin.common.MethodChannel
 
 class MainActivity : FlutterActivity() {
@@ -198,6 +199,7 @@ class MainActivity : FlutterActivity() {
     // The map screen asks through this channel when that happens.
     override fun configureFlutterEngine(flutterEngine: FlutterEngine) {
         super.configureFlutterEngine(flutterEngine)
+        if (!flutterEngine.plugins.has(BlePlugin::class.java)) flutterEngine.plugins.add(BlePlugin())
         linkChannel = MethodChannel(flutterEngine.dartExecutor.binaryMessenger, "co.cache/link").also {
             it.setMethodCallHandler { call, result ->
                 when (call.method) {

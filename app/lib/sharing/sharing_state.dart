@@ -14,6 +14,8 @@ import '../settings/data_policy.dart';
 import '../settings/space.dart' show reserveFor, totalBytesOnDisk;
 import '../platform/app_log.dart';
 import '../platform/multicast_lock.dart';
+import '../platform/bluetooth.dart';
+import 'bluetooth_session.dart';
 import 'identity_keep.dart';
 import 'install_marker.dart';
 import 'share_rules.dart' show kSettingsShareId;
@@ -43,6 +45,7 @@ class SharingState extends ChangeNotifier {
     bool? phone,
     bool? reticulum,
     MulticastLock? multicast,
+    BluetoothPlatform? bluetooth,
     String? Function()? deviceKind,
     void Function(String line)? log,
     Timer Function(Duration after, void Function() run)? timer,
@@ -61,6 +64,7 @@ class SharingState extends ChangeNotifier {
        _reticulum = reticulum ?? (!kIsWeb && (Platform.isAndroid || Platform.isLinux || Platform.isIOS)),
        // Android needs a multicast lock held while it runs; nothing else does.
        _multicast = multicast ?? (!kIsWeb && Platform.isAndroid ? MulticastLock() : null),
+       _bluetoothPlatform = bluetooth ?? (!kIsWeb && (Platform.isAndroid || Platform.isIOS) ? BluetoothPlatform() : null),
        // The kind travels only in the Nearby name request: Android says phone or tablet; nothing else says.
        _deviceKind = deviceKind ?? (!kIsWeb && Platform.isAndroid ? _androidKind : () => null),
        _reserveBytes = reserveBytes ?? _storageReserve,
@@ -148,6 +152,7 @@ class SharingState extends ChangeNotifier {
 
   /// The Android multicast lock, taken just before the engine opens and let go when it stops; null where none is needed.
   final MulticastLock? _multicast;
+  final BluetoothPlatform? _bluetoothPlatform;
 
   /// What Cache leaves free on the phone, for the volume holding a folder: the same rule Storage shows ([reserveFor]).
   final int Function(String dir) _reserveBytes;
@@ -183,6 +188,22 @@ class SharingState extends ChangeNotifier {
   late final SharingDriver _driver = _remote != null ? _WebDriver(this, _remote) : _PhoneDriver(this);
 
   String? error;
+  bool bluetoothWanted = false;
+  BluetoothStatus bluetoothStatus = const BluetoothStatus();
+
+  Future<void> setBluetooth(bool on) async {
+    final driver = _driver;
+    if (driver is! _PhoneDriver || _bluetoothPlatform == null) throw UnsupportedError('Bluetooth is not available on this device');
+    await driver.setBluetooth(on);
+  }
+
+  Future<void> allowBluetooth() async {
+    final platform = _bluetoothPlatform;
+    final driver = _driver;
+    if (platform == null || driver is! _PhoneDriver) return;
+    await platform.requestPermissions();
+    await driver._applyPolicy();
+  }
   Map<String, dynamic> status = const {};
 
   /// Whether this is Cache Server seen from a browser (the server's sharing host drives it), not a phone or a desktop.
@@ -606,6 +627,10 @@ class _PhoneDriver implements SharingDriver {
   final SharingState s;
 
   SyncCoreLike? _core;
+  late final BluetoothSession? _bluetooth = s._bluetoothPlatform == null ? null : BluetoothSession(s._bluetoothPlatform!);
+  Future<void>? _policyTail;
+  bool _disposed = false;
+  bool _tickBusy = false;
   bool _enabled = false;
   bool _starting = false;
   Timer? _poll;
@@ -645,7 +670,8 @@ class _PhoneDriver implements SharingDriver {
           ..clear()
           ..addAll({for (final e in off.entries) if (e.value is List) '${e.key}': {for (final k in e.value as List) '$k'}});
       }
-      // Everything _save writes (enabled, off, ask_since) is loaded before any save, or a save would overwrite the file with defaults.
+      // Everything _save writes is loaded before a migration save, including this device's Bluetooth choice.
+      s.bluetoothWanted = j['bluetooth'] == true;
       final enabled = j['enabled'] == true;
       _enabled = enabled;
       final since = j['ask_since'];
@@ -673,6 +699,7 @@ class _PhoneDriver implements SharingDriver {
       f,
       jsonEncode({
         'enabled': _enabled,
+        if (s.bluetoothWanted) 'bluetooth': true,
         'ask_since': ?s._askSince,
         if (s.newDevice) 'new_device': true,
         if (_off.values.any((v) => v.isNotEmpty)) 'off': {for (final e in _off.entries) if (e.value.isNotEmpty) e.key: [...e.value]..sort()},
@@ -745,6 +772,8 @@ class _PhoneDriver implements SharingDriver {
       final config = <String, Object?>{
         'dir': dir.path,
         'name': s.deviceName,
+        // No outgoing round starts before the current per-carrier policy has been applied.
+        'network': false,
         if (s._phone) 'dht': false,
         // Reticulum's Wi-Fi discovery (the engine's `reticulum`; a peer it finds says `via: 'wifi'`).
         'reticulum': s._reticulum,
@@ -930,6 +959,14 @@ class _PhoneDriver implements SharingDriver {
 
   bool? _lastMobile;
 
+  Future<void> setBluetooth(bool on) async {
+    s.bluetoothWanted = on;
+    await _save();
+    if (on && s.bluetoothStatus.permissions.isNotEmpty) await s._bluetoothPlatform!.requestPermissions();
+    await _applyPolicy();
+    if (!_disposed) s._changed();
+  }
+
   void _onSettings() {
     if (_lastMobile == policy.settings.mobileForDownloads) return;
     _lastMobile = policy.settings.mobileForDownloads;
@@ -937,10 +974,31 @@ class _PhoneDriver implements SharingDriver {
   }
 
   /// Sync uses the network the way downloads do: Wi-Fi and other connections always, mobile data only when downloads may use it.
-  Future<void> _applyPolicy() async {
+  Future<void> _applyPolicy() {
+    final previous = _policyTail;
+    late final Future<void> next;
+    next = (previous == null ? _applyCurrentPolicy()
+        : previous.then<void>((_) => _applyCurrentPolicy(), onError: (Object _) => _applyCurrentPolicy()))
+        .whenComplete(() { if (identical(_policyTail, next)) _policyTail = null; });
+    _policyTail = next;
+    return next;
+  }
+
+  Future<void> _applyCurrentPolicy() async {
+    if (_disposed) return;
     final kind = await policy.probe.current();
     final ok = kind != ConnectionKind.none && !(kind == ConnectionKind.mobile && !policy.settings.mobileForDownloads);
-    await _core?.call('set_policy', {'network': ok});
+    final core = _core;
+    if (_disposed || core == null) return;
+    final bluetooth = _bluetooth;
+    if (bluetooth == null) {
+      await core.call('set_policy', {'network': ok});
+    } else {
+      final state = await bluetooth.reconcile(wanted: s.bluetoothWanted, ipAllowed: ok, core: (m, a) => core.call(m, a));
+      if (_disposed) return;
+      s.bluetoothStatus = state;
+      s._changed();
+    }
   }
 
   @override
@@ -965,19 +1023,26 @@ class _PhoneDriver implements SharingDriver {
   /// Every 2 s the status; every 10 s what each linked device holds, and the items' list given to the engine again if it
   /// changed (a notebook made private, a new library here).
   Future<void> _tick() async {
-    // The engine's lines said since the last look (the one-time store move's summary, left-out files and dropped tags) go to
-    // the app's log (cache.log) as well as the Activity.
-    s._drainNow();
-    await refresh();
-    if (++_ticks % 5 == 0) {
-      await refreshItems();
-      await _applyOff();
-      await _writeSnapshot();
+    if (_disposed || _tickBusy) return;
+    _tickBusy = true;
+    try {
+      if (_bluetooth != null) await _applyPolicy();
+      // The engine's lines said since the last look (the one-time store move's summary, left-out files and dropped tags) go to
+      // the app's log (cache.log) as well as the Activity.
+      s._drainNow();
+      await refresh();
+      if (++_ticks % 5 == 0) {
+        await refreshItems();
+        await _applyOff();
+        await _writeSnapshot();
+      }
+      // Photos follow the shared entries without waiting for a sync.
+      if (_ticks % 15 == 0) await refreshGate();
+      // Refresh the app-engine mark every 30 seconds.
+      if (_ticks % 15 == 0) _lock?.engineStarted(kSyncWork);
+    } finally {
+      _tickBusy = false;
     }
-    // The photos that may be sent follow the entries (an entry made private, a photo taken off one) without waiting for a sync.
-    if (_ticks % 15 == 0) await refreshGate();
-    // The mark that this app's engine runs (a background round never opens a second one), written again every 30 s.
-    if (_ticks % 15 == 0) _lock?.engineStarted(kSyncWork);
   }
 
   BackgroundLock? _lock;
@@ -1213,12 +1278,14 @@ class _PhoneDriver implements SharingDriver {
 
   @override
   void dispose() {
+    _disposed = true;
     _slowStart?.cancel();
     _drain?.cancel();
     _poll?.cancel();
     _net?.cancel();
     if (_core != null) policy.settings.removeListener(_onSettings);
     _lock?.engineStopped(kSyncWork);
+    unawaited(_bluetooth?.close().catchError((Object e) { s._log('Sharing: Bluetooth shutdown failed (${e.runtimeType})'); }));
     _core?.close();
     _releaseMulticast();
   }

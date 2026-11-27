@@ -7,14 +7,22 @@ import 'widgets.dart';
 
 /// "Wi-Fi and local network, 2 entry points": what the Ways to connect row on Sharing and sync says. The count is of the entry points
 /// that are on; with none, it is left out. (Only what the engine does today: no Bluetooth until there is a Bluetooth link to say.)
-String waysSummary(int entriesOn) => switch (entriesOn) {
+String waysSummary(int entriesOn, {bool bluetooth = false}) => bluetooth ? switch (entriesOn) {
+  0 => 'Wi-Fi, Bluetooth and local network',
+  1 => 'Wi-Fi, Bluetooth and 1 entry point',
+  _ => 'Wi-Fi, Bluetooth and $entriesOn entry points',
+} : switch (entriesOn) {
   0 => 'Wi-Fi and local network',
   1 => 'Wi-Fi and local network, 1 entry point',
   _ => 'Wi-Fi and local network, $entriesOn entry points',
 };
 
 /// "Wi-Fi", "Wi-Fi and 2 entry points": the first part of This device's line on Sharing and sync.
-String thisDeviceWays(int entriesOn) => switch (entriesOn) {
+String thisDeviceWays(int entriesOn, {bool bluetooth = false, bool ipAllowed = true}) => !ipAllowed ? (bluetooth ? 'Bluetooth' : 'No connection') : bluetooth ? switch (entriesOn) {
+  0 => 'Wi-Fi and Bluetooth',
+  1 => 'Wi-Fi, Bluetooth and 1 entry point',
+  _ => 'Wi-Fi, Bluetooth and $entriesOn entry points',
+} : switch (entriesOn) {
   0 => 'Wi-Fi',
   1 => 'Wi-Fi and 1 entry point',
   _ => 'Wi-Fi and $entriesOn entry points',
@@ -74,6 +82,20 @@ class _WaysToConnectPageState extends State<WaysToConnectPage> {
 
   void _add() => Navigator.of(context).push(MaterialPageRoute<void>(builder: (_) => EntryPointPage(sharing: s)));
 
+  Future<void> _bluetooth(bool on) async {
+    if (_busy) return;
+    setState(() => _busy = true);
+    try { await s.setBluetooth(on); } catch (e) { if (mounted) say(context, '$e'); }
+    finally { if (mounted) setState(() => _busy = false); }
+  }
+
+  Future<void> _allowBluetooth() async {
+    if (_busy) return;
+    setState(() => _busy = true);
+    try { await s.allowBluetooth(); } catch (e) { if (mounted) say(context, '$e'); }
+    finally { if (mounted) setState(() => _busy = false); }
+  }
+
   @override
   Widget build(BuildContext context) {
     final k = context.t;
@@ -85,6 +107,22 @@ class _WaysToConnectPageState extends State<WaysToConnectPage> {
           title: 'Ways to connect',
           children: [
             const NoteText("Cache uses every way that's on to reach your other devices."),
+            if (s.bluetoothStatus.supported) ...[
+              SettingsGroup(rows: [SettingsRow(
+                key: const ValueKey('bluetooth-way'),
+                icon: Icons.bluetooth,
+                title: 'Bluetooth',
+                status: [Part(!s.bluetoothWanted ? 'Off' : s.bluetoothStatus.error != null ? 'Bluetooth could not start'
+                  : s.bluetoothStatus.permissions.isNotEmpty ? 'Permission needed'
+                  : !s.bluetoothStatus.enabled ? 'Turn on Bluetooth on this device'
+                  : s.bluetoothStatus.active ? 'Ready for nearby devices' : 'Starting…')],
+                trailing: Switch(value: s.bluetoothWanted, onChanged: _busy ? null : _bluetooth),
+                onTap: _busy ? null : () => _bluetooth(!s.bluetoothWanted),
+              )]),
+              if (s.bluetoothWanted && s.bluetoothStatus.permissions.isNotEmpty)
+                OutlinedButton(onPressed: _busy ? null : _allowBluetooth, child: const Text('Allow Bluetooth')),
+              const NoteText('Bluetooth peering runs while Cache is open. Small changes can sync without Wi-Fi or mobile data.'),
+            ],
             Column(
               crossAxisAlignment: CrossAxisAlignment.stretch,
               children: [
@@ -96,14 +134,14 @@ class _WaysToConnectPageState extends State<WaysToConnectPage> {
                     key: const ValueKey('no-entries'),
                     color: k.surface,
                     borderRadius: BorderRadius.circular(16),
-                    child: const Padding(
+                    child: Padding(
                       padding: EdgeInsets.symmetric(horizontal: 14, vertical: 12),
                       child: Column(
                         crossAxisAlignment: CrossAxisAlignment.start,
                         children: [
-                          Text('No entry points yet', style: TextStyle(fontSize: 15, fontWeight: FontWeight.w500)),
-                          SizedBox(height: 2),
-                          _Plain('For now your devices connect only over Wi-Fi.'),
+                          const Text('No entry points yet', style: TextStyle(fontSize: 15, fontWeight: FontWeight.w500)),
+                          const SizedBox(height: 2),
+                          _Plain(s.bluetoothWanted && s.bluetoothStatus.enabled ? 'Your devices can connect over Wi-Fi or Bluetooth.' : 'For now your devices connect only over Wi-Fi.'),
                         ],
                       ),
                     ),

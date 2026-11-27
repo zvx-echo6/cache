@@ -74,6 +74,30 @@ pub struct PairSelf {
     pub kind: Option<String>,
 }
 
+fn nearby_carrier(via: crate::Via, local_tcp: bool, hops: u8) -> Option<crate::Via> {
+    if hops > MAX_HOPS { return None; }
+    match via {
+        via @ (crate::Via::Wifi | crate::Via::Bluetooth) => Some(via),
+        _ if local_tcp => Some(crate::Via::Wifi), // Explicit loopback carrier stand-in, never the app's default.
+        _ => None,
+    }
+}
+
+#[cfg(test)]
+mod carrier_tests {
+    use super::nearby_carrier;
+    use crate::Via;
+
+    #[test]
+    fn bluetooth_nearby_is_local_and_keeps_its_carrier_label() {
+        assert_eq!(nearby_carrier(Via::Bluetooth, false, 1), Some(Via::Bluetooth));
+        assert_eq!(nearby_carrier(Via::Bluetooth, false, 2), None);
+        assert_eq!(nearby_carrier(Via::Wifi, false, 1), Some(Via::Wifi));
+        assert_eq!(nearby_carrier(Via::Entry("hub".into()), false, 1), None);
+        assert_eq!(nearby_carrier(Via::Other, false, 0), None);
+    }
+}
+
 /// A device heard nearby and asked for its name.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct NearbyDevice {
@@ -81,6 +105,7 @@ pub struct NearbyDevice {
     pub id: String,
     pub name: Option<String>,
     pub kind: Option<String>,
+    pub via: crate::Via,
 }
 
 /// Where a Nearby link stands (what the app shows).
@@ -181,6 +206,7 @@ struct Heard {
     last_ms: u64,
     named: Option<(Option<String>, Option<String>)>,
     asking: bool,
+    via: crate::Via,
 }
 
 #[derive(Default)]
@@ -369,19 +395,19 @@ impl Nearby {
     }
 
     async fn announce(&self, dest: DestinationHash) {
-        // Local interfaces only. A Wi-Fi auto interface is a fleet of peer lanes: Prns fans an interface-targeted
-        // announce out to the one lane it names, so each member is named in turn.
+        // Local peer lanes only, never entry points. Prns targets one fleet member at a time rather than fanning a parent
+        // target out to its members, so both Wi-Fi and Bluetooth peer lanes must be named explicitly.
         let targets: Vec<AnnounceTarget> = if self.local_tcp {
             vec![AnnounceTarget::AllInterfaces]
-        } else if let Some(w) = &self.wifi {
-            w.members()
-                .iter()
-                .map(|m| m.id())
-                .filter(|id| matches!(id.kind(), Some(InterfaceKind::AutoWifi | InterfaceKind::WifiPeer)))
-                .map(AnnounceTarget::Interface)
-                .collect()
         } else {
-            Vec::new()
+            let mut ids: Vec<_> = self.wifi.as_ref().map(|w| w.members().iter().map(|m| m.id())
+                .filter(|id| matches!(id.kind(), Some(InterfaceKind::AutoWifi | InterfaceKind::WifiPeer))).collect()).unwrap_or_default();
+            for snapshot in self.handle.interfaces() {
+                if snapshot.id.kind() == Some(InterfaceKind::BluetoothPeer) && !ids.contains(&snapshot.id) {
+                    ids.push(snapshot.id);
+                }
+            }
+            ids.into_iter().map(AnnounceTarget::Interface).collect()
         };
         for target in targets {
             let _ = self
@@ -401,7 +427,7 @@ impl Nearby {
 
     // ---- hearing ----
 
-    pub(crate) fn on_announce(&self, dest: DestinationHash, local: bool, hops: u8) {
+    pub(crate) fn on_announce(&self, dest: DestinationHash, via: crate::Via, hops: u8) {
         if dest == self.me || self.pool.contains(&dest) {
             return;
         }
@@ -409,12 +435,13 @@ impl Nearby {
         if i.announces_heard.len() < 512 || i.announces_heard.contains_key(&key(&dest)) {
             *i.announces_heard.entry(key(&dest)).or_default() += 1;
         }
-        let local = local || self.local_tcp;
-        if !local || hops > MAX_HOPS || i.page.is_none() || self.peers_dest.lock().unwrap().contains(&dest) {
+        let Some(via) = nearby_carrier(via, self.local_tcp, hops) else { return };
+        if i.page.is_none() || self.peers_dest.lock().unwrap().contains(&dest) {
             return;
         }
         let now = self.now();
-        i.heard.entry(key(&dest)).or_insert(Heard { last_ms: now, named: None, asking: false }).last_ms = now;
+        i.heard.entry(key(&dest)).and_modify(|h| { h.last_ms = now; h.via = via.clone(); })
+            .or_insert(Heard { last_ms: now, named: None, asking: false, via });
     }
 
     /// The devices heard nearby that answered for their name, while our own page is open.
@@ -428,7 +455,7 @@ impl Nearby {
             .iter()
             .filter_map(|(d, h)| {
                 let (name, kind) = h.named.clone()?;
-                Some(NearbyDevice { id: dest_hex(&DestinationHash::new(*d)), name, kind })
+                Some(NearbyDevice { id: dest_hex(&DestinationHash::new(*d)), name, kind, via: h.via.clone() })
             })
             .collect();
         v.sort_by(|a, b| a.id.cmp(&b.id));

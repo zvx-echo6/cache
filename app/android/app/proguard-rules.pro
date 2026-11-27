@@ -12,3 +12,5 @@
 -keep class * implements com.google.firebase.components.ComponentRegistrar {
     <init>();
 }
+# JNI looks up the per-session handle field and its native method names directly.
+-keep class com.happylittlellc.cache.reticulum.NativeBridge { *; }

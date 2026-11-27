@@ -345,7 +345,7 @@ class _SharingPageState extends State<SharingPage> {
                   title: s.name,
                   status: [
                     // "Wi-Fi and 2 entry points · 10.0 GB free" (a browser's server has no entry points to list).
-                    online ? Part(s.onServer ? (relay != null ? 'Online' : 'Local network only') : thisDeviceWays(s.entriesOn), s.onServer ? (relay != null ? Tone.ok : Tone.warn) : Tone.normal) : const Part('Paused: no network it may use', Tone.warn),
+                    online ? Part(s.onServer ? (relay != null ? 'Online' : 'Local network only') : thisDeviceWays(s.entriesOn, bluetooth: s.bluetoothWanted && s.bluetoothStatus.enabled, ipAllowed: s.status['ip_network'] != false), s.onServer ? (relay != null ? Tone.ok : Tone.warn) : Tone.normal) : const Part('Paused: no network it may use', Tone.warn),
                     if (st['free_bytes'] is int) Part(' · ${formatBytes(st['free_bytes'] as int)} free'),
                   ],
                   statusLines: 2,
@@ -376,7 +376,7 @@ class _SharingPageState extends State<SharingPage> {
                   SettingsRow(
                     key: const ValueKey('ways-to-connect'),
                     title: 'Ways to connect',
-                    status: [Part(waysSummary(s.entriesOn))],
+                    status: [Part(waysSummary(s.entriesOn, bluetooth: s.bluetoothWanted && s.bluetoothStatus.enabled))],
                     statusLines: 2,
                     onTap: () => Navigator.of(context).push(MaterialPageRoute<void>(builder: (_) => WaysToConnectPage(sharing: s))),
                   ),
@@ -453,7 +453,7 @@ class _SharingPageState extends State<SharingPage> {
 }
 
 /// How a linked device is reached now, from the engine's `via` and `speed` (step 3's class of the link).
-enum RouteKind { wifi, entry, slow, relay, direct }
+enum RouteKind { wifi, bluetooth, entry, slow, relay, direct }
 
 /// The way [p] is reached, and, through an entry point, the host it comes in through ([entryHost] gives it for an id; null or an
 /// unknown id says "the internet"). Only what the engine knows: Wi-Fi, an entry point, or a link it judges slow (a slow link that is
@@ -464,6 +464,7 @@ enum RouteKind { wifi, entry, slow, relay, direct }
   final entryId = SharingState.entryIdOfVia(via);
   if (entryId != null) return (kind: RouteKind.entry, host: entryHost?.call(entryId));
   if (via == 'wifi') return (kind: RouteKind.wifi, host: null);
+  if (via == 'bluetooth') return (kind: RouteKind.bluetooth, host: null);
   if (p['speed'] == 'slow' && p['live'] != false) return (kind: RouteKind.slow, host: null);
   return (kind: via == 'relay' ? RouteKind.relay : RouteKind.direct, host: null);
 }
@@ -484,6 +485,7 @@ List<Part> peerStatus(Map<String, dynamic> p, {String? Function(String id)? entr
     final how = switch (r.kind) {
       RouteKind.relay => 'a relay',
       RouteKind.wifi => 'Wi-Fi',
+      RouteKind.bluetooth => 'Bluetooth',
       RouteKind.entry => through,
       RouteKind.slow || RouteKind.direct => 'direct',
     };
@@ -492,6 +494,7 @@ List<Part> peerStatus(Map<String, dynamic> p, {String? Function(String id)? entr
   final now = switch (r.kind) {
     RouteKind.relay => 'Connected through a relay',
     RouteKind.wifi => 'Same Wi-Fi',
+    RouteKind.bluetooth => 'Bluetooth',
     RouteKind.entry => 'Through $through',
     RouteKind.slow => 'Connected, slow link: small items only',
     RouteKind.direct => 'Connected directly',

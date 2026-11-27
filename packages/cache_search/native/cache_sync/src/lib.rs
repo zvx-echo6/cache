@@ -22,8 +22,11 @@ pub mod entries;
 pub mod identity;
 pub mod index;
 pub mod transport;
+mod ip_policy;
 #[cfg(any(target_os = "linux", target_os = "android", target_os = "ios"))]
 mod rns_transport;
+#[cfg(target_os = "android")]
+pub use cache_rns::bluetooth::{android_bridge, AndroidBleBridge, AndroidBleIngressAdmission, ANDROID_BLE_PEER_CAPACITY};
 
 use anyhow::{anyhow, bail, Context, Result};
 use index::{Action, Entry, Index, Ver};
@@ -4439,6 +4442,13 @@ impl SyncEngine {
         let s = |k: &str| args.get(k).and_then(|v| v.as_str()).map(|s| s.to_string());
         match method {
             "status" => Ok(self.status()),
+            "bluetooth_start" => Ok(json!({"ok": true, "handle": inner.net.bluetooth_start()?})),
+            "bluetooth_stop" => {
+                inner.net.bluetooth_stop();
+                Ok(json!({"ok": true}))
+            }
+            "bluetooth_status" => Ok(json!({"handle": inner.net.bluetooth_handle(), "peers": inner.net.bluetooth_peers(),
+                "ready": inner.net.bluetooth_ready(), "error": inner.net.bluetooth_error()})),
             "set_name" => {
                 let name = s("name").filter(|n| !n.trim().is_empty()).ok_or_else(|| anyhow!("name is required"))?;
                 inner.saved.lock().unwrap().name = name.trim().to_string();
@@ -5076,6 +5086,9 @@ impl SyncEngine {
                 if let Some(n) = args.get("network").and_then(|v| v.as_bool()) {
                     inner.network.store(n, Ordering::Relaxed);
                 }
+                if let Some(ip) = args.get("ip_network").and_then(|v| v.as_bool()) {
+                    self.rt.block_on(inner.net.set_ip_allowed(ip))?;
+                }
                 if let Some(r) = args.get("reserve_bytes").and_then(|v| v.as_u64()) {
                     inner.reserve.store(r, Ordering::Relaxed);
                 }
@@ -5184,6 +5197,7 @@ impl SyncEngine {
             "relay": relay,
             "direct": direct,
             "network": inner.network.load(Ordering::Relaxed),
+            "ip_network": inner.net.ip_allowed(),
             "reserve_bytes": inner.reserve.load(Ordering::Relaxed),
             "free_bytes": Inner::free_bytes(&inner.dir),
             "showing_code": inner.pairing.lock().unwrap().as_ref().map(|(_, until)| until.saturating_duration_since(Instant::now()).as_secs()).or_else(|| {

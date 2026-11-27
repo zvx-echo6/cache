@@ -232,6 +232,24 @@ pub trait Transport: Send + Sync + 'static {
     fn entry_status(&self) -> Vec<EntryStatus> {
         Vec::new()
     }
+    /// Outbound IP permission is independent of whether a local carrier may keep syncing.
+    fn ip_allowed(&self) -> bool { true }
+    fn set_ip_allowed(&self, _on: bool) -> BoxFut<'_, Result<()>> {
+        Box::pin(async { Ok(()) })
+    }
+    /// Creates the mobile BLE session after permission. Android starts its GATT adapter separately; iOS owns it in Rust.
+    fn bluetooth_start(&self) -> Result<u64> {
+        Err(anyhow!("Bluetooth peering is not available on this device"))
+    }
+    /// Revokes native callbacks and detaches the BLE fleet. Idempotent.
+    fn bluetooth_stop(&self) {}
+    /// The current session, so a platform adapter can notice a Reticulum restart and replace its old callback handle.
+    fn bluetooth_handle(&self) -> Option<u64> {
+        None
+    }
+    fn bluetooth_peers(&self) -> usize { 0 }
+    fn bluetooth_ready(&self) -> Option<bool> { None }
+    fn bluetooth_error(&self) -> Option<String> { None }
     /// Lets a device connect (linked, or about to be).
     fn allow(&self, peer: &str);
     /// Stops letting a device connect.
@@ -353,6 +371,7 @@ impl EndpointHooks for Gate {
 
 /// iroh: the network Cache has used since 1.0.
 pub struct IrohTransport {
+    ip_policy: crate::ip_policy::IpPolicy,
     endpoint: Endpoint,
     /// Addresses given in a pairing (a short link code has none), for iroh to connect with later.
     known: iroh::address_lookup::MemoryLookup,
@@ -377,12 +396,14 @@ impl IrohTransport {
         if let Ok(l) = endpoint.address_lookup() {
             l.add(known.clone());
         }
-        Ok(Arc::new(IrohTransport { endpoint, known, allowed, router: Mutex::new(None), bridge }))
+        Ok(Arc::new(IrohTransport { ip_policy: Default::default(), endpoint, known, allowed, router: Mutex::new(None), bridge }))
     }
 
     /// The iroh address for a link code (waits a few seconds for the endpoint to be online).
     pub(crate) async fn iroh_addr(&self) -> EndpointAddr {
-        let _ = tokio::time::timeout(Duration::from_secs(5), self.endpoint.online()).await;
+        if self.ip_policy.allowed() {
+            let _ = tokio::time::timeout(Duration::from_secs(5), self.endpoint.online()).await;
+        }
         self.endpoint.addr()
     }
 
@@ -404,7 +425,7 @@ impl Transport for IrohTransport {
     }
 
     fn ask<'a>(&'a self, peer: &'a str, ask: Ask, closed: &'a AtomicU32) -> BoxFut<'a, Result<(Vec<u8>, String)>> {
-        Box::pin(async move {
+        Box::pin(self.ip_policy.run(async move {
             // The close code of the other device's Gate, whichever step meets it (at connect the text carries it; at write or read
             // only the error's source does).
             let seen = |e: &(dyn std::error::Error + 'static)| {
@@ -446,11 +467,11 @@ impl Transport for IrohTransport {
                 })?;
             conn.close(0u32.into(), b"done");
             Ok((bytes, via))
-        })
+        }))
     }
 
     fn pair(&self, to: PairTarget, hello: Vec<u8>) -> BoxFut<'_, Result<Vec<u8>>> {
-        Box::pin(async move {
+        Box::pin(self.ip_policy.run(async move {
             let conn = tokio::time::timeout(Duration::from_secs(45), self.endpoint.connect(to.iroh, PAIR_ALPN))
                 .await
                 .map_err(|_| anyhow!("the other device did not answer"))?
@@ -461,7 +482,7 @@ impl Transport for IrohTransport {
             let bytes = recv.read_to_end(4096).await.map_err(|e| anyhow!("{e}"))?;
             conn.close(0u32.into(), b"done");
             Ok(bytes)
-        })
+        }))
     }
 
     fn link_addr(&self) -> BoxFut<'_, (EndpointAddr, Option<String>)> {
@@ -485,7 +506,7 @@ impl Transport for IrohTransport {
     }
 
     fn fetch<'a>(&'a self, store: &'a Store, hash: Hash, providers: Vec<String>) -> BoxFut<'a, Result<BoxStream<FetchEvent>>> {
-        Box::pin(async move {
+        Box::pin(self.ip_policy.run(async move {
             let providers: Vec<EndpointId> = providers.iter().filter_map(|p| p.parse().ok()).collect();
             let strategy = if providers.len() > 1 { SplitStrategy::Split } else { SplitStrategy::None };
             // Downloads land in the bridge's view; when one is whole it is moved into `store`.
@@ -522,8 +543,15 @@ impl Transport for IrohTransport {
                 }
             })
             .filter_map(|x| x);
-            Ok(Box::pin(events.chain(land)) as BoxStream<FetchEvent>)
-        })
+            Ok(self.ip_policy.stream(Box::pin(events.chain(land)) as BoxStream<FetchEvent>))
+        }))
+    }
+
+    fn ip_allowed(&self) -> bool { self.ip_policy.allowed() }
+
+    fn set_ip_allowed(&self, on: bool) -> BoxFut<'_, Result<()>> {
+        self.ip_policy.set(on);
+        Box::pin(async { Ok(()) })
     }
 
     fn network_change(&self) -> BoxFut<'_, ()> {

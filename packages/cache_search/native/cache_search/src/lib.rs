@@ -5,6 +5,8 @@
 pub mod act;
 pub mod budget;
 mod build_lock;
+#[cfg(target_os = "android")]
+mod bluetooth_jni;
 pub mod conv;
 pub mod duty;
 pub mod error;

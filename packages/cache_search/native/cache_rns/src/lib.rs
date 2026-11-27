@@ -35,6 +35,8 @@ use tokio::sync::mpsc;
 pub use personal_rns::prelude::DestinationHash;
 
 pub mod blobs;
+#[cfg(feature = "bluetooth")]
+pub mod bluetooth;
 #[cfg(feature = "rnode")]
 pub mod rnode;
 #[cfg(feature = "rnode")]
@@ -198,6 +200,8 @@ pub fn destination_for(device: &SecretKey) -> Result<DestinationHash> {
 pub enum Via {
     /// Over Wi-Fi/LAN discovery (auto Wi-Fi, or one of its peers).
     Wifi,
+    /// A directly attached Bluetooth peer, not an internet entry point or a Wi-Fi interface.
+    Bluetooth,
     /// Through the entry point (an rnsd the person entered) with this id ([`EntryPoint::id`]).
     Entry(String),
     /// Over anything else (TCP, hubs, radio).
@@ -269,6 +273,17 @@ pub enum Iface {
     #[cfg(feature = "rnode")]
     /// An RNode (LoRa), by a name for the interface, where it is, and its radio settings ([`rnode`]).
     RNode { name: String, port: rnode::RNodePort, radio: rnode::Radio },
+}
+
+impl Iface {
+    /// Whether attaching this carrier requires IP permission. A remote TCP radio still uses IP, unlike direct serial/BLE.
+    pub fn uses_ip(&self) -> bool {
+        match self {
+            Self::TcpListen(_) | Self::TcpConnect(_) | Self::WifiAuto | Self::Entry(_) => true,
+            #[cfg(feature = "rnode")]
+            Self::RNode { port, .. } => matches!(port, rnode::RNodePort::Tcp(_)),
+        }
+    }
 }
 
 /// Who is asking.
@@ -434,7 +449,7 @@ enum Ev {
     },
     PairAnnounce {
         destination: DestinationHash,
-        local: bool,
+        via: Via,
         hops: u8,
     },
     Pair {
@@ -618,6 +633,7 @@ impl RnsNode {
                                     iface: source_interface,
                                     via: match source_interface.kind() {
                                         Some(InterfaceKind::AutoWifi | InterfaceKind::WifiPeer) => Via::Wifi,
+                                        Some(InterfaceKind::BluetoothAuto | InterfaceKind::BluetoothPeer) => Via::Bluetooth,
                                         _ => Via::Other,
                                     },
                                 },
@@ -705,7 +721,11 @@ impl RnsNode {
                         if is_pair {
                             let _ = observer_tx.send(Ev::PairAnnounce {
                                 destination: obs.destination,
-                                local: matches!(obs.source_interface.kind(), Some(InterfaceKind::AutoWifi | InterfaceKind::WifiPeer)),
+                                via: match obs.source_interface.kind() {
+                                    Some(InterfaceKind::AutoWifi | InterfaceKind::WifiPeer) => Via::Wifi,
+                                    Some(InterfaceKind::BluetoothAuto | InterfaceKind::BluetoothPeer) => Via::Bluetooth,
+                                    _ => Via::Other,
+                                },
                                 hops: obs.hops.0,
                             });
                         }
@@ -872,7 +892,7 @@ impl RnsNode {
                                 .identity_on_link
                                 .insert(link, identity);
                         }
-                        Ev::PairAnnounce { destination, local, hops } => nearby.on_announce(destination, local, hops),
+                        Ev::PairAnnounce { destination, via, hops } => nearby.on_announce(destination, via, hops),
                         Ev::Pair { link, data } => nearby.on_message(link, &data),
                         Ev::Established { link, rtt_ms } => {
                             let mut s = state.lock().unwrap();
@@ -1650,6 +1670,7 @@ async fn route_via(handle: &PrnsNodeHandle, state: &Arc<Mutex<State>>, destinati
         Some(id) => Via::Entry(id.clone()),
         None => match route.interface.kind() {
             Some(InterfaceKind::AutoWifi | InterfaceKind::WifiPeer) => Via::Wifi,
+            Some(InterfaceKind::BluetoothAuto | InterfaceKind::BluetoothPeer) => Via::Bluetooth,
             _ => Via::Other,
         },
     })
@@ -1675,6 +1696,7 @@ async fn asker_cap(handle: &PrnsNodeHandle, state: &Arc<Mutex<State>>, asker: Pu
 fn route_label(s: &State, via: &Via) -> String {
     match via {
         Via::Wifi => "Wi-Fi".to_string(),
+        Via::Bluetooth => "Bluetooth".to_string(),
         Via::Other => "other".to_string(),
         Via::Entry(id) => s.entries.get(id).map_or("an entry point that was removed".to_string(), |e| e.wire.addr.clone()),
     }

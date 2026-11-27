@@ -22,6 +22,8 @@
 	</dict>
 	<key>NSLocalNetworkUsageDescription</key>
 	<string>Cache finds and syncs with linked devices and connects to map, video and other data sources you choose on your local network.</string>
+	<key>NSBluetoothAlwaysUsageDescription</key>
+	<string>Cache uses Bluetooth to link and sync with nearby devices.</string>
 	<key>NSCameraUsageDescription</key>
 	<string>Cache uses the camera to add photos to your notebook entries and to read the code that links two devices.</string>
 	<key>NSPhotoLibraryUsageDescription</key>
@@ -48,6 +50,8 @@
 		<string>audio</string>
 		<string>fetch</string>
 		<string>processing</string>
+		<string>bluetooth-central</string>
+		<string>bluetooth-peripheral</string>
 	</array>
 	<key>ITSAppUsesNonExemptEncryption</key>
 	<false/>
