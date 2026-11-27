@@ -28,9 +28,9 @@ blake3 = "1.8"
 rand = "0.9"
 url = "2"
 
-# Reticulum (1.2): a second network beside iroh, on Android and Linux only (the iOS, macOS and Windows builds do not pull in Prns).
+# Reticulum (1.2): a second network beside iroh, on Android, Linux and iOS.
 # The `rnode` feature of cache_rns stays off: it would pull in bluer and dbus.
-[target.'cfg(any(target_os = "linux", target_os = "android"))'.dependencies]
+[target.'cfg(any(target_os = "linux", target_os = "android", target_os = "ios"))'.dependencies]
 cache_rns = { path = "../cache_rns" }
 
 [features]
@@ -43,5 +43,5 @@ tempfile = "3"
 cache_sync = { path = ".", features = ["test-hooks"] }
 
 # The routed test stands up a Prns transport node (what rnsd is on a real network); same pin and features as cache_rns.
-[target.'cfg(any(target_os = "linux", target_os = "android"))'.dev-dependencies]
+[target.'cfg(any(target_os = "linux", target_os = "android", target_os = "ios"))'.dev-dependencies]
 personal-rns = { git = "https://github.com/KenAKAFrosty/Prns", tag = "v0.3.8-hotfix.1", features = ["tokio-host", "tcp", "config", "serial", "udp", "pipe", "i2p", "wifi-auto"] }

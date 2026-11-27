@@ -99,9 +99,9 @@ List<ShareItem> notebookItems(NotebookState notebooks) => [
 Future<List<String>> notebookPhotosToSend(NotebookState notebooks, List<String> off) =>
     notebookPhotosToSendFrom(notebooks, off, included: (id) => notebooks.privateSharing?.included(id) ?? false);
 
-/// A notebook on a linked device only; the photos folder every notebook uses travels with the kind.
+/// A notebook on a linked device only; shared photos and deletion records travel with the kind but are not notebooks.
 ShareItem? notebookRemoteItem(String share, String path, int bytes) =>
-    path == 'photos' ? null : ShareItem(share: share, path: path, name: path, bytes: bytes);
+    path == 'photos' || path == '_deleted' ? null : ShareItem(share: share, path: path, name: path, bytes: bytes);
 
 /// Switches a private notebook on or off: its "Include in sync and sharing".
 Future<void> setNotebookShared(NotebookState notebooks, ShareItem it, bool on) async {

@@ -22,7 +22,7 @@ pub mod entries;
 pub mod identity;
 pub mod index;
 pub mod transport;
-#[cfg(any(target_os = "linux", target_os = "android"))]
+#[cfg(any(target_os = "linux", target_os = "android", target_os = "ios"))]
 mod rns_transport;
 
 use anyhow::{anyhow, bail, Context, Result};
@@ -294,7 +294,7 @@ pub struct Config {
     /// system before it can close the engine; absent: no limit (the app's own engine).
     #[serde(default)]
     pub lifetime_secs: Option<u64>,
-    /// Run Reticulum beside iroh (Android and Linux; ignored elsewhere): `true`, `false`, or `"entries"`. Off unless asked: with no
+    /// Run Reticulum beside iroh (Android, Linux and iOS; ignored elsewhere): `true`, `false`, or `"entries"`. Off unless asked: with no
     /// `rns_interfaces`, it listens and finds devices on the local network (Wi-Fi auto) and connects to the entry points that
     /// are on. `"entries"` is Reticulum with the entry points only and no Wi-Fi auto (what the background-sync service runs,
     /// which holds no multicast lock).
@@ -3717,7 +3717,7 @@ struct PairHello {
 
 /// The Reticulum interfaces to start with: the test block's (or Wi-Fi auto, unless the mode is `"entries"`), and every entry point that
 /// is on (this device's, and the test block's own).
-#[cfg(any(target_os = "linux", target_os = "android"))]
+#[cfg(any(target_os = "linux", target_os = "android", target_os = "ios"))]
 fn rns_ifaces(cfg: &Config, entries: &[entries::EntryPoint]) -> Vec<cache_rns::Iface> {
     let mut v = Vec::new();
     match &cfg.rns_interfaces {
@@ -4209,17 +4209,17 @@ impl SyncEngine {
         let lent: Arc<Mutex<HashSet<Hash>>> = Arc::default();
         let bridge = bridge::Bridge::new(cfg.dir.join("blobs-iroh-view"), wanted.clone(), lent.clone());
         let iroh_net = IrohTransport::bind(b, saved.peers.iter().map(|p| p.id.clone()), gate.clone(), bridge).await?;
-        // Reticulum beside iroh (Android and Linux), when asked: the saved links with the destination saved for each.
-        #[cfg(any(target_os = "linux", target_os = "android"))]
+        // Reticulum beside iroh (Android, Linux and iOS), when asked: the saved links with the destination saved for each.
+        #[cfg(any(target_os = "linux", target_os = "android", target_os = "ios"))]
         let multi = (cfg.reticulum != Reticulum::Off).then(|| {
             rns_transport::MultiTransport::new(iroh_net.clone(), saved.peers.iter().map(|p| (p.id.clone(), p.rns.as_ref().map(|r| r.dest.clone()))))
         });
-        #[cfg(any(target_os = "linux", target_os = "android"))]
+        #[cfg(any(target_os = "linux", target_os = "android", target_os = "ios"))]
         let net: Arc<dyn Transport> = match &multi {
             Some(m) => m.clone(),
             None => iroh_net.clone(),
         };
-        #[cfg(not(any(target_os = "linux", target_os = "android")))]
+        #[cfg(not(any(target_os = "linux", target_os = "android", target_os = "ios")))]
         let net: Arc<dyn Transport> = iroh_net.clone();
         steps.step("endpoint bound");
 
@@ -4321,7 +4321,7 @@ impl SyncEngine {
         steps.step("state saved");
         // From here the links are loaded and written: the Gate may answer "not linked" (when the grace allows it).
         gate.ready.store(true, Ordering::SeqCst);
-        #[cfg(any(target_os = "linux", target_os = "android"))]
+        #[cfg(any(target_os = "linux", target_os = "android", target_os = "ios"))]
         if let Some(m) = &multi {
             // After the store has opened: the node serves from it. Without Reticulum the device carries on over iroh alone.
             let ifaces = rns_ifaces(&cfg, &inner.entries.lock().unwrap().iter().filter(|r| !r.removed).map(|r| r.point()).collect::<Vec<_>>());
@@ -4589,7 +4589,7 @@ impl SyncEngine {
                 inner.wake.notify_one();
                 Ok(json!({"ok": true, "peer": peer.to_string(), "name": pname}))
             }
-            // Nearby linking (Android and Linux, with Reticulum on): the app drives it with these five calls and polls the
+            // Nearby linking (Android, Linux and iOS, with Reticulum on): the app drives it with these five calls and polls the
             // list and the state while its link-code page is open.
             "pairing_open" => {
                 let (name, kind) = inner.nearby_self();
@@ -5590,14 +5590,14 @@ mod former_tests {
         assert_eq!(with.former.len(), 1);
     }
 
-    #[cfg(any(target_os = "linux", target_os = "android"))]
+    #[cfg(any(target_os = "linux", target_os = "android", target_os = "ios"))]
     fn plan_entry(id: &str, on: bool) -> entries::EntryPoint {
         entries::EntryPoint { id: id.into(), host: "rt.example.net".into(), port: 4965, network_name: None, passphrase: None, on, cap_bytes: entries::DEFAULT_CAP_BYTES }
     }
 
     /// The background mode (`"reticulum": "entries"`) starts the entry points that are on and no Wi-Fi auto (the background service
     /// holds no multicast lock); the plain mode keeps Wi-Fi auto beside them; the test block still replaces Wi-Fi auto.
-    #[cfg(any(target_os = "linux", target_os = "android"))]
+    #[cfg(any(target_os = "linux", target_os = "android", target_os = "ios"))]
     #[test]
     fn the_entries_mode_has_the_entries_that_are_on_and_no_wifi_auto() {
         let cfg = |v: Value| -> Config { serde_json::from_value(json!({"dir": "/x", "reticulum": v})).unwrap() };
@@ -5624,7 +5624,7 @@ mod former_tests {
     }
 
     /// An entry's passphrase is never in what a log line or a failed assert prints of the config.
-    #[cfg(any(target_os = "linux", target_os = "android"))]
+    #[cfg(any(target_os = "linux", target_os = "android", target_os = "ios"))]
     #[test]
     fn an_entry_point_prints_without_its_passphrase() {
         let mut e = plan_entry("aa", true);

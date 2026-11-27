@@ -92,6 +92,12 @@ class _Rig {
 Future<_Rig> _rig() async => _Rig(await Directory.systemTemp.createTemp('sharing-items'));
 
 void main() {
+  test('notebook sync metadata is not listed as a notebook', () {
+    expect(notebookRemoteItem('notebooks', 'photos', 10), isNull);
+    expect(notebookRemoteItem('notebooks', '_deleted', 20), isNull);
+    expect(notebookRemoteItem('notebooks', 'Field notes', 30)?.name, 'Field notes');
+  });
+
   test('each item has its own switch, and the kind\'s one share carries the items switched off', () async {
     final r = await _rig();
     // Desk holds a ZIM this device does not.

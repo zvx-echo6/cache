@@ -267,7 +267,9 @@ impl Transport for MultiTransport {
     fn ask<'a>(&'a self, peer: &'a str, ask: Ask, closed: &'a AtomicU32) -> BoxFut<'a, Result<(Vec<u8>, String)>> {
         Box::pin(async move {
             let key: Option<PublicKey> = peer.parse().ok();
-            let node = self.node().zip(key).filter(|(n, k)| n.reachable(k));
+            // A newly linked or restarted device may have its destination saved before a path is cached. Let request()
+            // discover that path now instead of making the first round iroh-only and waiting for the periodic path finder.
+            let node = self.node().zip(key).filter(|_| self.peers.lock().unwrap().get(peer).is_some_and(Option::is_some));
             let Some((node, key)) = node else {
                 let r = self.iroh.ask(peer, ask, closed).await;
                 if r.is_ok() {
@@ -973,5 +975,49 @@ mod tests {
         let lists = Serving { serve: Arc::new(Lists) };
         let linked = Asker::Linked(SecretKey::generate().public());
         assert_eq!(lists.request(linked, PATH_ENTRIES, b"ask".to_vec()).await.unwrap(), b"the list");
+    }
+
+    /// A new link can be saved before the periodic path finder runs. Its first sync must discover the stored destination,
+    /// rather than trying only iroh and waiting for a later timer or manual retry.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+    async fn first_request_finds_an_uncached_reticulum_path() {
+        let dir = tempfile::tempdir().unwrap();
+        let (ka, kb) = (SecretKey::generate(), SecretKey::generate());
+        let port = std::net::TcpListener::bind("127.0.0.1:0").unwrap().local_addr().unwrap().port();
+        let server = RnsNode::start(RnsConfig {
+            device: kb.clone(),
+            interfaces: vec![Iface::TcpListen(format!("127.0.0.1:{port}"))],
+            peers: vec![(ka.public(), Some(cache_rns::destination_for(&ka).unwrap()))],
+            wifi_group: None,
+            paths: vec![PATH_ENTRIES.into()],
+            open_paths: vec![],
+            max_bytes: MAX_INDEX as u64,
+            blobs: None,
+            pair_local_tcp: false,
+        }, Arc::new(Serving { serve: Arc::new(Lists) })).await.unwrap();
+        let bridge = crate::bridge::Bridge::new(dir.path().join("iroh-view"), Arc::default(), Arc::default());
+        let iroh = IrohTransport::bind(
+            iroh::Endpoint::builder(iroh::endpoint::presets::Minimal).secret_key(ka.clone()),
+            [], Arc::new(crate::GateState::default()), bridge,
+        ).await.unwrap();
+        let client = MultiTransport::new(iroh, []);
+        let store = Store::open(&dir.path().join("store"), cache_store::Options::default()).unwrap();
+        client.start_rns(ka, &store, Arc::new(Unreached), vec![Iface::TcpConnect(format!("127.0.0.1:{port}"))], false).await.unwrap();
+        let node = client.node().unwrap();
+        node.set_path_every(Duration::from_secs(3600));
+        // Let the empty peer list's initial path scan complete before adding the peer. No periodic scan can satisfy the test.
+        tokio::time::sleep(Duration::from_millis(500)).await;
+        let dest = server.destination();
+        client.allow(&kb.public().to_string());
+        assert!(client.learn_rns(&kb.public().to_string(), &cache_rns::dest_hex(&dest), &hex(&cache_rns::vouch_destination(&kb, &dest))));
+        assert!(!node.reachable(&kb.public()), "the first request starts without a cached path");
+        let closed = AtomicU32::new(0);
+        let result = tokio::time::timeout(Duration::from_secs(15), client.ask(&kb.public().to_string(), Ask::Entries, &closed)).await;
+        node.stop();
+        server.stop();
+        client.iroh.shutdown().await;
+        let (body, via) = result.expect("the first request discovers a path without a timer or Sync now").unwrap();
+        assert_eq!(body, b"the list");
+        assert_eq!(via, "reticulum");
     }
 }

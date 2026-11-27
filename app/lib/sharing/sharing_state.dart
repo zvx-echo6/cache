@@ -57,8 +57,8 @@ class SharingState extends ChangeNotifier {
        _drainLog = drainLog ?? drainSyncLog,
        _every = every ?? ((d, run) => Timer.periodic(d, (_) => run())),
        _phone = phone ?? (!kIsWeb && (Platform.isAndroid || Platform.isIOS)),
-       // Reticulum's local discovery runs on Android and Linux for now (not in a browser, not on iOS).
-       _reticulum = reticulum ?? (!kIsWeb && (Platform.isAndroid || Platform.isLinux)),
+       // Reticulum runs on Android, Linux and iOS, not in a browser.
+       _reticulum = reticulum ?? (!kIsWeb && (Platform.isAndroid || Platform.isLinux || Platform.isIOS)),
        // Android needs a multicast lock held while it runs; nothing else does.
        _multicast = multicast ?? (!kIsWeb && Platform.isAndroid ? MulticastLock() : null),
        // The kind travels only in the Nearby name request: Android says phone or tablet; nothing else says.
@@ -132,7 +132,7 @@ class SharingState extends ChangeNotifier {
   /// linked devices are still found by mDNS, n0's lookup and the relay. Anywhere else (the server, the desktop) the engine's default (on) stands.
   final bool _phone;
 
-  /// The engine runs Reticulum's Wi-Fi discovery (the config key `reticulum`): Android and Linux. Peers found that way say `via: 'wifi'`.
+  /// The engine runs Reticulum's Wi-Fi discovery (the config key `reticulum`): Android, Linux and iOS. Peers found that way say `via: 'wifi'`.
   final bool _reticulum;
 
   /// What this device calls itself in the Nearby name request (`phone`, `tablet`), or null to leave it out.

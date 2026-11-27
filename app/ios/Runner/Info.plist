@@ -21,7 +21,7 @@
 		<true/>
 	</dict>
 	<key>NSLocalNetworkUsageDescription</key>
-	<string>Cache connects to map, video and other data sources you choose on your local network.</string>
+	<string>Cache finds and syncs with linked devices and connects to map, video and other data sources you choose on your local network.</string>
 	<key>NSCameraUsageDescription</key>
 	<string>Cache uses the camera to add photos to your notebook entries and to read the code that links two devices.</string>
 	<key>NSPhotoLibraryUsageDescription</key>
