@@ -11,6 +11,12 @@ name: Android test APK
 
 on:
   workflow_dispatch:
+    inputs:
+      test_build_number:
+        description: 'Optional test versionCode: 100001–2100000000; blank uses 100000 + run number'
+        type: string
+        required: false
+        default: ''
 
 concurrency:
   group: android-test-apk-${{ github.ref }}
@@ -24,7 +30,38 @@ env:
   RUST_VERSION: 1.99.1
 
 jobs:
+  plan:
+    runs-on: ubuntu-latest
+    outputs:
+      test_build_number: ${{ steps.number.outputs.test_build_number }}
+    steps:
+      - name: Validate test build number
+        id: number
+        env:
+          INPUT_TEST_BUILD_NUMBER: ${{ inputs.test_build_number }}
+        run: |
+          python3 - <<'PY'
+          import os
+          import re
+          import sys
+
+          raw = os.environ["INPUT_TEST_BUILD_NUMBER"]
+          run_number = os.environ["GITHUB_RUN_NUMBER"]
+          value = raw if raw else run_number
+          if not re.fullmatch(r"[0-9]{1,10}", value):
+              print("::error::Test build number must be decimal digits (or blank for the run-based default)")
+              sys.exit(1)
+          selected = int(raw) if raw else 100000 + int(run_number)
+          if not 100000 < selected <= 2100000000:
+              print("::error::Test build number must be greater than 100000 and no greater than 2100000000")
+              sys.exit(1)
+          with open(os.environ["GITHUB_OUTPUT"], "a", encoding="utf-8") as output:
+              output.write(f"test_build_number={selected}\n")
+          print(f"Test APK versionCode: {selected}")
+          PY
+
   routing:
+    needs: plan
     runs-on: ubuntu-latest
     timeout-minutes: 150
     steps:
@@ -77,8 +114,10 @@ jobs:
           retention-days: 2
 
   app:
-    needs: routing
+    needs: [plan, routing]
     runs-on: ubuntu-latest
+    env:
+      TEST_BUILD_NUMBER: ${{ needs.plan.outputs.test_build_number }}
     timeout-minutes: 120
     steps:
       - uses: actions/checkout@v4
@@ -187,9 +226,9 @@ jobs:
         run: |
           flutter --version
           flutter pub get
-          # Test builds never edit pubspec.yaml: the build number comes from the run number, so it rises with each run and is
-          # above every number already installed.
-          flutter build apk --release --target-platform android-arm64 --build-number=$((100000 + GITHUB_RUN_NUMBER))
+          # Test builds never edit pubspec.yaml. Use the validated override or run-based default;
+          # an upgrade over a higher installed test build requires an explicit higher override.
+          flutter build apk --release --target-platform android-arm64 --build-number="$TEST_BUILD_NUMBER"
           mkdir -p "$GITHUB_WORKSPACE/out"
           cp build/app/outputs/flutter-apk/app-release.apk "$GITHUB_WORKSPACE/out/Cache-test-${GITHUB_SHA::7}.apk"
       - name: Verify the APK
@@ -200,6 +239,10 @@ jobs:
           "$aapt2" dump badging "$apk" > "$RUNNER_TEMP/badging.txt"
           grep -E "^package:|^application-label:|^native-code:" "$RUNNER_TEMP/badging.txt"
           grep -q "^package: name='com.happylittlellc.cache.test'" "$RUNNER_TEMP/badging.txt" || { echo "::error::Not the .test package"; exit 1; }
+          actual=$(sed -n "s/^package: .*versionCode='\([0-9]*\)'.*/\1/p" "$RUNNER_TEMP/badging.txt")
+          if [[ "$actual" != "$TEST_BUILD_NUMBER" ]]; then
+            echo "::error::APK versionCode $actual does not match selected test build number $TEST_BUILD_NUMBER"; exit 1
+          fi
           grep -q "^application-label:'Cache test'" "$RUNNER_TEMP/badging.txt" || { echo "::error::The label is not Cache test"; exit 1; }
           "$aapt2" dump xmltree --file AndroidManifest.xml "$apk" > "$RUNNER_TEMP/manifest-tree.txt"
           grep -E 'android:authorities' "$RUNNER_TEMP/manifest-tree.txt" || true
