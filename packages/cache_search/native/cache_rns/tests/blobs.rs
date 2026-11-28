@@ -5,7 +5,7 @@ use std::time::{Duration, Instant};
 
 use anyhow::Result;
 use cache_rns::blobs::{fetch, WINDOW_CHUNKS};
-use cache_rns::{Asker, BoxFut, Config, Handler, Iface, RnsNode};
+use cache_rns::{destination_for, Asker, BoxFut, Config, Handler, Iface, RnsNode};
 use cache_store::{ChunkNum, ChunkRanges, Hash, Options, Store};
 use iroh::{PublicKey, SecretKey};
 
@@ -46,23 +46,25 @@ async fn pair() -> Pair {
     let a_store = Store::open(&da.path().join("store"), Options::default()).unwrap();
     let b_store = Store::open(&db.path().join("store"), Options::default()).unwrap();
     let port = std::net::TcpListener::bind("127.0.0.1:0").unwrap().local_addr().unwrap().port();
-    let cfg = |k: &SecretKey, i: Iface, peer: PublicKey, store: &Store| Config {
+    let cfg = |k: &SecretKey, i: Iface, peer: &SecretKey, store: &Store| Config {
         device: k.clone(),
         interfaces: vec![i],
-        peers: vec![peer],
+        peers: vec![(peer.public(), Some(destination_for(peer).unwrap()))],
+        wifi_group: None,
         paths: vec![],
         open_paths: vec![],
         max_bytes: 64 * 1024 * 1024,
         blobs: Some(store.clone()),
+        pair_local_tcp: false,
     };
-    let a = RnsNode::start(cfg(&ka, Iface::TcpListen(format!("127.0.0.1:{port}")), kb.public(), &a_store), Arc::new(Nothing))
+    let a = RnsNode::start(cfg(&ka, Iface::TcpListen(format!("127.0.0.1:{port}")), &kb, &a_store), Arc::new(Nothing))
         .await
         .unwrap();
-    let b = RnsNode::start(cfg(&kb, Iface::TcpConnect(format!("127.0.0.1:{port}")), ka.public(), &b_store), Arc::new(Nothing))
+    let b = RnsNode::start(cfg(&kb, Iface::TcpConnect(format!("127.0.0.1:{port}")), &ka, &b_store), Arc::new(Nothing))
         .await
         .unwrap();
     let end = Instant::now() + Duration::from_secs(20);
-    while !(b.knows(&ka.public()) && a.knows(&kb.public())) {
+    while !(b.reachable(&ka.public()) && a.reachable(&kb.public())) {
         assert!(Instant::now() < end, "the two devices hear each other within 20 s");
         let _ = a.announce().await;
         let _ = b.announce().await;

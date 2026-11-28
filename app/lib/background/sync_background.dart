@@ -309,6 +309,8 @@ Future<String> syncBackgroundJob({
     try {
       final opening = opener({
         ...config!,
+        // Iroh only here: the Wi-Fi multicast lock is held by the app, and a round has none, so no multicast runs without it.
+        'reticulum': false,
         'dir': '$support${Platform.pathSeparator}sync',
         // one automatic round (the engine's first); the engine stops itself shortly after the budget if this run is cut off
         'interval_secs': 3600,

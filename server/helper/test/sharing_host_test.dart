@@ -194,6 +194,8 @@ void main() {
     final cfg = c.config;
     expect(cfg['dir'], '${data.path}/sync');
     expect(cfg['name'], 'Test box');
+    expect(cfg['reticulum'], true, reason: 'Cache on Linux discovers devices on the same Wi-Fi');
+    expect(cfg['device_kind'], 'computer');
     // the network settings are the engine's defaults, as on the phone: none of them is given
     for (final k in ['relay', 'relay_urls', 'dht', 'mdns', 'lookup', 'lookup_url', 'port', 'interval_secs', 'reserve_bytes']) {
       expect(cfg.containsKey(k), isFalse, reason: k);
@@ -372,7 +374,7 @@ void main() {
     // only the host's own start-up share_add calls happened, none with the browser's path
     expect(c.argsOf('share_add').every((a) => a['path'] != '/etc'), isTrue);
     expect(await h.invoke('sharing.call', {'method': 'link_code', 'args': {}}), containsPair('code', 'CACHE1-abc'));
-    for (final m in ['unlink', 'set_name', 'set_peer_name', 'set_link', 'sync_now', 'share_items']) {
+    for (final m in ['unlink', 'set_name', 'set_peer_name', 'set_link', 'sync_now', 'share_items', 'pairing_open', 'pairing_close', 'nearby_list', 'nearby_link', 'nearby_state', 'nearby_answer']) {
       await h.invoke('sharing.call', {'method': m, 'args': {'x': 1}});
       expect(c.argsOf(m).last, {'x': 1}, reason: m);
     }
@@ -420,6 +422,9 @@ void main() {
     final c = opened.single;
     expect(SharingHost.browserMethods, containsAll(['key_names', 'set_key_on']));
     expect(SharingHost.secretMethods, containsAll(['set_secrets', 'take_secrets']));
+    // Nearby linking (the "Show my link code" page): a browser may open and close pairing, list what is nearby, link and answer.
+    expect(SharingHost.browserMethods, containsAll(['pairing_open', 'pairing_close', 'nearby_list', 'nearby_link', 'nearby_state', 'nearby_answer']));
+    expect(SharingHost.browserMethods.intersection(SharingHost.secretMethods), isEmpty);
     final names = await h.invoke('sharing.call', {'method': 'key_names', 'args': {}});
     expect(names, {
       'keys': [

@@ -2,24 +2,27 @@ import 'package:cache_search/cache_search.dart' show CacheSearchException;
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:qr_flutter/qr_flutter.dart';
-import 'package:share_plus/share_plus.dart';
 
 import '../../maps/ui/format.dart';
 import '../../platform.dart' as plat;
 import '../../settings/data_kinds.dart';
 import '../../sharing/link_inbox.dart';
+import '../../sharing/link_scan.dart';
 import '../../sharing/link_url.dart';
 import '../../sharing/settings_sync.dart';
 import '../../sharing/sharing_state.dart';
 import '../../theme.dart';
+import 'link_code_page.dart';
+import 'ways_to_connect_page.dart';
+import 'link_scan_screen.dart';
 import 'settings_link_pages.dart';
 import 'widgets.dart';
 import '../../update/update_ui.dart' show updateCacheSnackAction;
-import '../../platform/share_or_copy.dart' show shareOrCopy;
+import '../../platform/device_lock.dart';
 
 /// Settings > Sharing and sync: this device's identity, linked devices, what it shares, and transfers.
 class SharingPage extends StatefulWidget {
-  const SharingPage({super.key, required this.sharing, this.settingsSync, this.inbox, this.share, this.onAndroid, this.onIos, this.onOpenItem});
+  const SharingPage({super.key, required this.sharing, this.settingsSync, this.inbox, this.share, this.onAndroid, this.onIos, this.onOpenItem, this.scanner});
 
   /// What an item's row opens (see [ShareItemOpener]); null: rows only toggle sharing.
   final ShareItemOpener? onOpenItem;
@@ -38,19 +41,47 @@ class SharingPage extends StatefulWidget {
   /// Sends text through the phone's share sheet; the real one unless a test gives one.
   final Future<void> Function(String text)? share;
 
+  /// Reads a link code from the camera ("Scan a code"); null: this platform's own (none on Linux and the web, where the button is hidden).
+  final LinkScanner? scanner;
+
   @override
   State<SharingPage> createState() => _SharingPageState();
 }
 
 /// The QR of a device's link (see link_url.dart): what a system camera reads and opens in Cache.
+///
+/// Made to scan: error correction Q, every module [kQrModulePx] logical pixels wide (a whole number of device pixels on a phone) and a
+/// quiet zone of [kQrQuietModules] modules, all inside the white square, black on white in light and dark. A link too long for that
+/// width (an old, long code) is drawn smaller, never refused.
+const kQrModulePx = 6.0;
+const kQrQuietModules = 4;
+
 class LinkQr extends StatelessWidget {
   const LinkQr({super.key, required this.link});
 
   final String link;
 
+  /// The modules along one side, for [link] at error correction Q.
+  static int modulesFor(String link) =>
+      QrValidator.validate(data: link, errorCorrectionLevel: QrErrorCorrectLevel.Q).qrCode?.moduleCount ?? 21;
+
   @override
-  Widget build(BuildContext context) =>
-      QrImageView(data: link, size: 260, backgroundColor: Colors.white, errorCorrectionLevel: QrErrorCorrectLevel.L);
+  Widget build(BuildContext context) {
+    final modules = modulesFor(link);
+    final whole = modules + 2 * kQrQuietModules;
+    return LayoutBuilder(
+      builder: (context, box) {
+        final px = box.maxWidth.isFinite && box.maxWidth < whole * kQrModulePx ? box.maxWidth / whole : kQrModulePx;
+        return QrImageView(
+          data: link,
+          size: whole * px,
+          padding: EdgeInsets.all(kQrQuietModules * px),
+          backgroundColor: Colors.white,
+          errorCorrectionLevel: QrErrorCorrectLevel.Q,
+        );
+      },
+    );
+  }
 }
 
 String _ago(int? ms) {
@@ -121,6 +152,8 @@ class _SharingPageState extends State<SharingPage> {
   /// engine, which gives the same messages; a code from a newer Cache is said here either way.
   String _checked(String code, {bool strict = false}) {
     final LinkCodeInfo info;
+    // A short code carries no device in it to read here; the engine says whose it is, and its own messages.
+    if (isShortLinkCode(code)) return code;
     try {
       info = decodeLinkCode(code);
     } on BadLinkCode catch (e) {
@@ -166,92 +199,59 @@ class _SharingPageState extends State<SharingPage> {
     );
   }
 
-  /// Shows the link code until the other device links with it (the sheet then closes and the question follows) or it is closed.
+  /// Opens the "Show my link code" page, which stays until the other device links with the code or a Nearby link is made (the
+  /// question about settings then follows) or it is closed.
   Future<void> _showCode() async {
     String? linked;
     await _run(() async {
       final code = await s.linkCode();
       if (!mounted) return;
-      final before = {for (final p in s.peers) p['id']: p['linked']};
-      BuildContext? sheet;
-      void onSharing() {
-        if (linked != null || sheet == null) return;
-        final fresh = s.peers.where((p) => !before.containsKey(p['id']) || before[p['id']] != p['linked']).firstOrNull;
-        if (fresh == null || fresh['id'] is! String) return;
-        linked = fresh['id'] as String;
-        Navigator.of(sheet!).pop();
-      }
-
-      s.addListener(onSharing);
-      try {
-        await _codeSheet(code, (ctx) => sheet = ctx);
-      } finally {
-        s.removeListener(onSharing);
-      }
+      linked = await Navigator.of(context).push<String>(MaterialPageRoute<String>(builder: (_) => LinkCodePage(sharing: s, code: code, share: widget.share)));
     });
-    if (linked != null) await _ask(linked!);
+    if (linked != null) {
+      if (mounted) say(context, 'Linked with ${s.peerOf(linked!)?['name'] ?? 'the other device'}');
+      await _ask(linked!);
+    }
   }
-
-  Future<void> _codeSheet(String code, void Function(BuildContext) opened) => showModalBottomSheet<void>(
-      context: context,
-      isScrollControlled: true,
-      builder: (ctx) {
-        opened(ctx);
-        return SafeArea(
-          child: Padding(
-            padding: const EdgeInsets.fromLTRB(20, 16, 20, 20),
-            child: Column(
-              mainAxisSize: MainAxisSize.min,
-              children: [
-                Text('Link code for ${s.name}', style: const TextStyle(fontSize: 18, fontWeight: FontWeight.w600)),
-                const SizedBox(height: 4),
-                Text('Works once, for 15 minutes', style: TextStyle(color: ctx.t.secondary)),
-                const SizedBox(height: 14),
-                Container(
-                  color: Colors.white,
-                  padding: const EdgeInsets.all(10),
-                  child: LinkQr(link: buildLinkUrl(code)),
-                ),
-                const SizedBox(height: 12),
-                SelectableText(code, style: const TextStyle(fontFamily: 'monospace', fontSize: 11), maxLines: 4),
-                const SizedBox(height: 8),
-                TextButton.icon(
-                  icon: const Icon(Icons.copy),
-                  label: const Text('Copy code'),
-                  onPressed: () {
-                    Clipboard.setData(ClipboardData(text: code));
-                    say(ctx, 'Copied');
-                  },
-                ),
-                TextButton.icon(
-                  key: const ValueKey('share-link'),
-                  icon: const Icon(Icons.share),
-                  label: const Text('Share link'),
-                  // a browser with no share sheet copies it instead, and says so
-                  onPressed: () => shareOrCopy(context, buildLinkUrl(code), share: widget.share ?? _systemShare, copied: 'Link copied'),
-                ),
-              ],
-            ),
-          ),
-        );
-      },
-    );
-
-  static Future<void> _systemShare(String text) => SharePlus.instance.share(ShareParams(text: text)).then((_) {});
 
   /// "Enter a link code". [initial] fills the box (a code that came in as a link). The clipboard is read only when Paste is tapped.
   Future<void> _enterCode({String? initial}) async {
     final ctl = TextEditingController(text: initial ?? '');
+    final scanner = widget.scanner ?? defaultLinkScanner();
     final code = await showDialog<String>(
       context: context,
       builder: (ctx) => AlertDialog(
         title: const Text('Enter a link code'),
-        content: TextField(
-          controller: ctl,
-          autofocus: true,
-          minLines: 3,
-          maxLines: 6,
-          decoration: const InputDecoration(hintText: 'CACHE1-…', border: OutlineInputBorder()),
+        content: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            TextField(
+              controller: ctl,
+              autofocus: true,
+              minLines: 3,
+              maxLines: 6,
+              decoration: const InputDecoration(hintText: 'CACHE-…', border: OutlineInputBorder()),
+            ),
+            if (scanner != null) ...[
+              const SizedBox(height: 12),
+              OutlinedButton.icon(
+                key: const ValueKey('scan-code'),
+                icon: const Icon(Icons.qr_code_scanner),
+                label: const Text('Scan a code'),
+                // A code read is linked as if typed and Link tapped.
+                onPressed: () async {
+                  final read = await Navigator.of(ctx).push<String>(MaterialPageRoute(builder: (_) => LinkScanScreen(scanner: scanner)));
+                  if (read != null && ctx.mounted) {
+                    ctl.text = read;
+                    Navigator.pop(ctx, read);
+                  }
+                },
+              ),
+              const SizedBox(height: 4),
+              const Text('Cache uses the camera only to read the link code.', style: TextStyle(fontSize: 12)),
+            ],
+          ],
         ),
         actions: [
           TextButton(onPressed: () => Navigator.pop(ctx), child: const Text('Cancel')),
@@ -344,9 +344,11 @@ class _SharingPageState extends State<SharingPage> {
                   icon: s.onServer ? Icons.dns : Icons.smartphone,
                   title: s.name,
                   status: [
-                    online ? Part(relay != null ? 'Online' : 'Local network only', relay != null ? Tone.ok : Tone.warn) : const Part('Paused: no network it may use', Tone.warn),
-                    if (st['free_bytes'] is int) Part(' · ${formatBytes(st['free_bytes'] as int)} free, keeps ${formatBytes(st['reserve_bytes'] as int)} free'),
+                    // "Wi-Fi and 2 entry points · 10.0 GB free" (a browser's server has no entry points to list).
+                    online ? Part(s.onServer ? (relay != null ? 'Online' : 'Local network only') : thisDeviceWays(s.entriesOn, bluetooth: s.bluetoothWanted && s.bluetoothStatus.enabled, ipAllowed: s.status['ip_network'] != false), s.onServer ? (relay != null ? Tone.ok : Tone.warn) : Tone.normal) : const Part('Paused: no network it may use', Tone.warn),
+                    if (st['free_bytes'] is int) Part(' · ${formatBytes(st['free_bytes'] as int)} free'),
                   ],
+                  statusLines: 2,
                   onTap: _rename,
                 ),
               ],
@@ -359,7 +361,7 @@ class _SharingPageState extends State<SharingPage> {
                     key: ValueKey('peer-${p['id']}'),
                     icon: Icons.devices_other,
                     title: p['name'] as String? ?? '',
-                    status: peerStatus(p),
+                    status: peerStatus(p, entryHost: s.entryHostOf),
                     statusLines: 2,
                     onTap: () => _peer(p),
                   ),
@@ -367,6 +369,19 @@ class _SharingPageState extends State<SharingPage> {
                 SettingsRow(key: const ValueKey('enter-code'), icon: Icons.keyboard_outlined, title: 'Enter a link code', onTap: _busy ? null : _enterCode),
               ],
             ),
+            if (!s.onServer)
+              SettingsGroup(
+                label: 'Ways to connect',
+                rows: [
+                  SettingsRow(
+                    key: const ValueKey('ways-to-connect'),
+                    title: 'Ways to connect',
+                    status: [Part(waysSummary(s.entriesOn, bluetooth: s.bluetoothWanted && s.bluetoothStatus.enabled))],
+                    statusLines: 2,
+                    onTap: () => Navigator.of(context).push(MaterialPageRoute<void>(builder: (_) => WaysToConnectPage(sharing: s))),
+                  ),
+                ],
+              ),
             SettingsGroup(
               label: 'Shared with linked devices',
               rows: [
@@ -437,18 +452,54 @@ class _SharingPageState extends State<SharingPage> {
   }
 }
 
-/// "Connected directly · Last seen 2 min ago", "Not reachable · Last seen 3 h ago", "Not reachable · Never connected since linking".
-/// The time is kept across restarts, so before the first check of a session it is told as a fact of the past ("Last seen 3 h ago
-/// via a relay"), not as a connection.
-List<Part> peerStatus(Map<String, dynamic> p) {
+/// How a linked device is reached now, from the engine's `via` and `speed` (step 3's class of the link).
+enum RouteKind { wifi, bluetooth, entry, slow, relay, direct }
+
+/// The way [p] is reached, and, through an entry point, the host it comes in through ([entryHost] gives it for an id; null or an
+/// unknown id says "the internet"). Only what the engine knows: Wi-Fi, an entry point, or a link it judges slow (a slow link that is
+/// not Wi-Fi and not through an entry point, and live now). Through an entry point or on Wi-Fi the route is named as it is, however
+/// fast it measures.
+({RouteKind kind, String? host}) peerRoute(Map<String, dynamic> p, {String? Function(String id)? entryHost}) {
+  final via = p['via'];
+  final entryId = SharingState.entryIdOfVia(via);
+  if (entryId != null) return (kind: RouteKind.entry, host: entryHost?.call(entryId));
+  if (via == 'wifi') return (kind: RouteKind.wifi, host: null);
+  if (via == 'bluetooth') return (kind: RouteKind.bluetooth, host: null);
+  if (p['speed'] == 'slow' && p['live'] != false) return (kind: RouteKind.slow, host: null);
+  return (kind: via == 'relay' ? RouteKind.relay : RouteKind.direct, host: null);
+}
+
+/// "Same Wi-Fi · Last seen just now", "Through rt.example.net · Last seen just now", "Connected, slow link: small items only · Last seen
+/// 5 min ago", "Connected directly · Last seen 2 min ago", "Not reachable · Last seen 3 h ago", "Not reachable · Never connected since
+/// linking". The time is kept across restarts, so before the first check of a session it is told as a fact of the past ("Last seen 3 h
+/// ago via a relay"), not as a connection.
+List<Part> peerStatus(Map<String, dynamic> p, {String? Function(String id)? entryHost}) {
   final err = p['error'] as String?;
   final seen = p['last_seen'] as int?;
-  final relay = p['via'] == 'relay';
+  final r = peerRoute(p, entryHost: entryHost);
+  final through = r.host ?? 'the internet';
   final lastSeen = seen == null ? 'Never connected since linking' : 'Last seen ${_ago(seen)}';
   if (err != null) return [const Part('Not reachable', Tone.warn), Part(' · $lastSeen')];
   if (seen == null) return const [Part('Checking…')];
-  if (p['live'] == false) return [Part('$lastSeen via ${relay ? 'a relay' : 'direct'}')];
-  return [Part(relay ? 'Connected through a relay' : 'Connected directly', Tone.ok), Part(' · $lastSeen')];
+  if (p['live'] == false) {
+    final how = switch (r.kind) {
+      RouteKind.relay => 'a relay',
+      RouteKind.wifi => 'Wi-Fi',
+      RouteKind.bluetooth => 'Bluetooth',
+      RouteKind.entry => through,
+      RouteKind.slow || RouteKind.direct => 'direct',
+    };
+    return [Part('$lastSeen via $how')];
+  }
+  final now = switch (r.kind) {
+    RouteKind.relay => 'Connected through a relay',
+    RouteKind.wifi => 'Same Wi-Fi',
+    RouteKind.bluetooth => 'Bluetooth',
+    RouteKind.entry => 'Through $through',
+    RouteKind.slow => 'Connected, slow link: small items only',
+    RouteKind.direct => 'Connected directly',
+  };
+  return [Part(now, Tone.ok), Part(' · $lastSeen')];
 }
 
 /// Asks before a linked device is unlinked. True when the person said Unlink.
@@ -721,9 +772,16 @@ class _SharingDevicePageState extends State<SharingDevicePage> {
     if (name != null && name.isNotEmpty && name != now) await _run(() => s.renamePeer(widget.peer, name));
   }
 
-  /// Both Unlink controls (the row and the button for a device never reached) ask once first.
+  /// Both Unlink controls (the row and the button for a device never reached) ask once first, then for the
+  /// phone's own screen lock (with none set, the confirm alone is enough).
   Future<void> _unlink(String name) async {
     if (!await confirmUnlink(context, name)) return;
+    final lock = await DeviceLock.confirm(title: 'Unlink $name?', description: "Confirm it's you to unlink this device.");
+    if (!mounted) return;
+    if (lock == DeviceLockResult.cancelled) {
+      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Not unlinked')));
+      return;
+    }
     await _run(() async {
       await s.unlink(widget.peer);
       if (mounted) Navigator.of(context).pop();
@@ -740,35 +798,49 @@ class _SharingDevicePageState extends State<SharingDevicePage> {
         final name = p['name'] as String? ?? '';
         final free = p['free_bytes'];
         final k = context.t;
+        final status = peerStatus(p, entryHost: s.entryHostOf);
         return SettingsPage(
           title: name,
           children: [
-            Material(
-              key: const ValueKey('device-status'),
-              color: k.surface,
-              borderRadius: BorderRadius.circular(16),
-              child: Padding(
-                padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    statusText(context, peerStatus(p), size: 14, maxLines: null),
-                    if (free is int) ...[const SizedBox(height: 2), statusText(context, [Part('${formatBytes(free)} free')], size: 14)],
-                    if (neverReached(p)) ...[
-                      const SizedBox(height: 10),
-                      Text("This device hasn't connected since it was linked.", key: const ValueKey('device-never'), style: TextStyle(fontSize: 14, color: k.text)),
-                      const SizedBox(height: 8),
-                      OutlinedButton.icon(
-                        key: const ValueKey('device-unlink-never'),
-                        icon: Icon(Icons.link_off, size: 18, color: k.emergency),
-                        label: Text('Unlink', style: TextStyle(color: k.emergency)),
-                        onPressed: _busy ? null : () => _unlink(name),
-                      ),
-                    ],
-                  ],
+            Column(
+              crossAxisAlignment: CrossAxisAlignment.stretch,
+              children: [
+                const GroupLabel('Status'),
+                Material(
+                  key: const ValueKey('device-status'),
+                  color: k.surface,
+                  borderRadius: BorderRadius.circular(16),
+                  child: Padding(
+                    padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        // The row's line, with its first part as the heading.
+                        Text(status.first.text, style: TextStyle(fontSize: 17, fontWeight: FontWeight.w600, color: k.text)),
+                        // While it is connected the heading is all (it is here now); otherwise when it was last seen.
+                        if (status.length > 1 && status.first.tone != Tone.ok) ...[
+                          const SizedBox(height: 2),
+                          statusText(context, [Part(status.skip(1).map((x) => x.text).join().replaceFirst(' · ', ''))], size: 14, maxLines: null),
+                        ],
+                        if (free is int) ...[const SizedBox(height: 2), statusText(context, [Part('${formatBytes(free)} free')], size: 14)],
+                        if (neverReached(p)) ...[
+                          const SizedBox(height: 10),
+                          Text("This device hasn't connected since it was linked.", key: const ValueKey('device-never'), style: TextStyle(fontSize: 14, color: k.text)),
+                          const SizedBox(height: 8),
+                          OutlinedButton.icon(
+                            key: const ValueKey('device-unlink-never'),
+                            icon: Icon(Icons.link_off, size: 18, color: k.emergency),
+                            label: Text('Unlink', style: TextStyle(color: k.emergency)),
+                            onPressed: _busy ? null : () => _unlink(name),
+                          ),
+                        ],
+                      ],
+                    ),
+                  ),
                 ),
-              ),
+              ],
             ),
+            if (s.waitingFor(widget.peer).isNotEmpty) _Waiting(items: s.waitingFor(widget.peer)),
             if (widget.settingsSync != null)
               DeviceSettingsSection(
                 key: const ValueKey('device-settings'),
@@ -778,42 +850,139 @@ class _SharingDevicePageState extends State<SharingDevicePage> {
                 // Known once it has answered: an older version never says it keeps links.
                 known: p['link_known'] == true || p['last_seen'] == null,
                 busy: _busy,
+                label: 'This link',
               ),
-            Row(
-              mainAxisAlignment: MainAxisAlignment.end,
-              children: [
-                TextButton.icon(
-                  key: const ValueKey('device-sync'),
-                  icon: const Icon(Icons.sync),
-                  label: const Text('Sync now'),
-                  onPressed: _busy
-                      ? null
-                      : () => _run(() async {
-                          final result = s.syncResult(peer: widget.peer, working: 'Syncing with $name');
-                          await s.syncPeer(widget.peer);
-                          if (context.mounted) say(context, result);
-                        }),
-                ),
-              ],
-            ),
             SettingsGroup(
               rows: [
-                SettingsRow(key: const ValueKey('device-rename'), icon: Icons.edit_outlined, title: 'Rename', chevron: false, onTap: _busy ? null : () => _rename(name)),
                 SettingsRow(
-                  key: const ValueKey('device-unlink'),
-                  leading: Icon(Icons.link_off, size: 22, color: k.emergency),
-                  title: 'Unlink',
-                  danger: true,
-                  status: const [Part('It can no longer connect to this device. Files already here stay.')],
-                  statusLines: null,
-                  chevron: false,
-                  onTap: _busy ? null : () => _unlink(name),
+                  key: const ValueKey('device-activity'),
+                  title: 'Activity',
+                  onTap: () => Navigator.of(context).push(MaterialPageRoute<void>(builder: (_) => _ActivityPage(sharing: s))),
                 ),
+                SettingsRow(key: const ValueKey('device-rename'), title: 'Rename', onTap: _busy ? null : () => _rename(name)),
               ],
+            ),
+            FilledButton(
+              key: const ValueKey('device-sync'),
+              style: FilledButton.styleFrom(minimumSize: const Size.fromHeight(52)),
+              onPressed: _busy
+                  ? null
+                  : () => _run(() async {
+                      final result = s.syncResult(peer: widget.peer, working: 'Syncing with $name');
+                      await s.syncPeer(widget.peer);
+                      if (context.mounted) say(context, result);
+                    }),
+              child: const Text('Sync now', style: TextStyle(fontSize: 16, fontWeight: FontWeight.w600)),
+            ),
+            OutlinedButton(
+              key: const ValueKey('device-unlink'),
+              style: OutlinedButton.styleFrom(
+                minimumSize: const Size.fromHeight(52),
+                foregroundColor: k.emergency,
+                side: BorderSide(color: k.emergency.withValues(alpha: 0.7), width: 1.5),
+              ),
+              onPressed: _busy ? null : () => _unlink(name),
+              child: const Text('Unlink', style: TextStyle(fontSize: 16, fontWeight: FontWeight.w600)),
             ),
           ],
         );
       },
+    );
+  }
+}
+
+/// A device's Activity: the engine's log and this app's own lines, newest first (the same list as the Activity on Sharing and sync).
+class _ActivityPage extends StatelessWidget {
+  const _ActivityPage({required this.sharing});
+
+  final SharingState sharing;
+
+  @override
+  Widget build(BuildContext context) => ListenableBuilder(
+    listenable: sharing,
+    builder: (context, _) {
+      final entries = sharing.activity;
+      return SettingsPage(
+        title: 'Activity',
+        children: [
+          if (entries.isEmpty) const NoteText('Nothing yet.'),
+          for (final e in entries.take(30))
+            ListTile(
+              dense: true,
+              contentPadding: const EdgeInsets.symmetric(horizontal: 6),
+              title: Text(e['text'] as String? ?? ''),
+              trailing: Text(_ago(e['at'] as int?), style: TextStyle(color: context.t.secondary, fontSize: 12)),
+            ),
+        ],
+      );
+    },
+  );
+}
+
+/// What waits for a faster connection, grouped by kind the way mockup 5 names it: "Region map" for the map files (any number) and "N
+/// photos" for a notebook's photos. Any other kind is named by its share's name (a library, models, videos...), and a folder's whole
+/// list by its share's name too; each row adds up the sizes of its files.
+List<({String label, int bytes})> waitingGroups(List<Map<String, dynamic>> items) {
+  const maps = {'maps', 'regions'};
+  const photoExt = {'jpg', 'jpeg', 'png', 'heic', 'heif', 'webp', 'gif'};
+  final order = <String>[];
+  final bytes = <String, int>{};
+  final photos = <String, int>{};
+  final names = <String, String>{};
+  for (final w in items) {
+    final share = (w['share_id'] as String?) ?? '';
+    final path = (w['path'] as String?) ?? '';
+    final ext = path.contains('.') ? path.split('.').last.toLowerCase() : '';
+    final String key;
+    if (maps.contains(share)) {
+      key = 'maps';
+      names[key] = 'Region map';
+    } else if (share == 'notebooks' && w['what'] == 'file' && photoExt.contains(ext)) {
+      key = 'photos';
+      photos[key] = (photos[key] ?? 0) + 1;
+    } else {
+      key = 'share:$share';
+      names[key] = (w['share'] as String?) ?? share;
+    }
+    if (!order.contains(key)) order.add(key);
+    bytes[key] = (bytes[key] ?? 0) + ((w['size'] as num?)?.toInt() ?? 0);
+  }
+  return [
+    for (final key in order)
+      (
+        label: key == 'photos' ? (photos[key] == 1 ? '1 photo' : '${photos[key]} photos') : names[key]!,
+        bytes: bytes[key]!,
+      ),
+  ];
+}
+
+/// "Waiting for a faster connection": what the engine holds back from a device until a faster link, one row per kind with its size.
+class _Waiting extends StatelessWidget {
+  const _Waiting({required this.items});
+
+  final List<Map<String, dynamic>> items;
+
+  @override
+  Widget build(BuildContext context) {
+    final k = context.t;
+    return Column(
+      key: const ValueKey('device-waiting'),
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        const GroupLabel('Waiting for a faster connection'),
+        SettingsGroup(
+          rows: [
+            for (final g in waitingGroups(items))
+              SettingsRow(
+                title: g.label,
+                chevron: false,
+                trailing: g.bytes > 0 ? Text(formatBytes(g.bytes), style: TextStyle(fontSize: 15, color: k.secondary)) : null,
+              ),
+          ],
+        ),
+        const SizedBox(height: 10),
+        const NoteText('These go the next time the devices are on the same Wi-Fi, or both use an entry point that allows files this big.'),
+      ],
     );
   }
 }

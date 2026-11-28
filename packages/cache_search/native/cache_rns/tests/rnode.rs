@@ -47,6 +47,7 @@ fn cfg(k: &SecretKey, host: &str, radio: Radio, peers: Vec<PublicKey>) -> Config
         open_paths: vec![],
         max_bytes: 1024 * 1024,
         blobs: None,
+        pair_local_tcp: false,
     }
 }
 

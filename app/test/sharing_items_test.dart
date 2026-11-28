@@ -92,6 +92,12 @@ class _Rig {
 Future<_Rig> _rig() async => _Rig(await Directory.systemTemp.createTemp('sharing-items'));
 
 void main() {
+  test('notebook sync metadata is not listed as a notebook', () {
+    expect(notebookRemoteItem('notebooks', 'photos', 10), isNull);
+    expect(notebookRemoteItem('notebooks', '_deleted', 20), isNull);
+    expect(notebookRemoteItem('notebooks', 'Field notes', 30)?.name, 'Field notes');
+  });
+
   test('each item has its own switch, and the kind\'s one share carries the items switched off', () async {
     final r = await _rig();
     // Desk holds a ZIM this device does not.
@@ -255,6 +261,9 @@ void main() {
   });
 
   testWidgets('Sync now: everything, a kind, an item', (tester) async {
+    // Taller than the default: the page has the Ways to connect row now, and the buttons under it must be on screen.
+    tester.view.physicalSize = const Size(2400, 3600);
+    addTearDown(tester.view.reset);
     final r = await tester.runAsync(_rig);
     final s = r!.make();
     await tester.runAsync(s.setUp);
@@ -326,7 +335,8 @@ void main() {
 
     await tester.tap(find.byKey(const ValueKey('peer-p1')));
     await tester.pumpAndSettle();
-    expect(find.text('Connected directly · Last seen 2 min ago'), findsOneWidget);
+    expect(find.text('Connected directly'), findsOneWidget);
+    expect(find.text('Last seen 2 min ago'), findsNothing, reason: 'connected: the page does not say when it was last seen');
     expect(find.text('612.0 GB free'), findsOneWidget);
 
     await tester.tap(find.byKey(const ValueKey('device-sync')));
@@ -343,7 +353,7 @@ void main() {
     expect(r.calls('set_peer_name').last, {'peer': 'p1', 'name': 'Office'});
     expect(find.text('Office'), findsOneWidget, reason: 'the page takes the new name');
 
-    expect(find.text('It can no longer connect to this device. Files already here stay.'), findsOneWidget);
+    expect(find.text('It can no longer connect to this device. Files already here stay.'), findsNothing);
     await tester.tap(find.byKey(const ValueKey('device-unlink')));
     await tester.pumpAndSettle();
     // One question first; Cancel leaves the device linked.
@@ -355,7 +365,11 @@ void main() {
     await tester.tap(find.byKey(const ValueKey('device-unlink')));
     await tester.pumpAndSettle();
     await tester.tap(find.byKey(const ValueKey('confirm-unlink')));
-    await tester.runAsync(() => Future<void>.delayed(const Duration(milliseconds: 20)));
+    await tester.runAsync(() async {
+      for (var i = 0; i < 200 && !(r.calls('unlink').isNotEmpty); i++) {
+        await Future<void>.delayed(const Duration(milliseconds: 10));
+      }
+    });
     await tester.pumpAndSettle();
     expect(r.calls('unlink').last, {'peer': 'p1'});
     expect(find.byKey(const ValueKey('peer-p1')), findsNothing, reason: 'back on Sharing and sync, the device is gone');
@@ -516,6 +530,9 @@ void main() {
   });
 
   testWidgets('Sync now says what happened: nothing shared, up to date, or syncing', (tester) async {
+    // Taller than the default: the page has the Ways to connect row now, and the buttons under it must be on screen.
+    tester.view.physicalSize = const Size(2400, 3600);
+    addTearDown(tester.view.reset);
     final r = await tester.runAsync(_rig);
     final s = r!.make();
     await tester.runAsync(s.setUp);
@@ -640,6 +657,46 @@ void main() {
     await s.setShared(r.kind('models'), true);
     await s.refresh();
     expect(result(), 'Up to date');
+    s.dispose();
+    await r.dir.delete(recursive: true);
+  });
+  test('Sync now result: a device fetching a folder in scope from this one is working; nothing fetching, or a folder out of scope, is Up to date', () async {
+    final r = await _rig();
+    final s = r.make();
+    await s.setUp();
+    await s.setShared(r.kind('models'), true);
+    await s.setShared(r.kind('library'), true);
+    r.sync.peers.add({'id': 'p1', 'name': 'Desk', 'linked': 1, 'link': {'mode': 'match'}});
+    r.sync.peers.add({'id': 'p2', 'name': 'Shed', 'linked': 1, 'link': {'mode': 'match'}});
+    await s.refresh();
+    const shared = 'models';
+    expect(s.shares.map((e) => e['id']), containsAll(['models', 'library']));
+    String result({Iterable<String>? shareIds, String? peer}) => s.syncResult(shareIds: shareIds, peer: peer, working: 'Syncing');
+    expect(result(), 'Up to date', reason: 'no device is fetching');
+
+    // (a) a device fetching a shared folder: working, with no pending file or transfer here.
+    r.sync.peers.first['fetching'] = {'share': shared, 'size': 100, 'done': 10};
+    await s.refresh();
+    expect(result(), 'Syncing');
+    expect(result(shareIds: [shared]), 'Syncing');
+    expect(result(peer: 'p1'), 'Syncing');
+
+    // (c) a folder outside shareIds, and a folder the app always shares, are not what the person shared.
+    r.sync.peers.first['fetching'] = {'share': shared, 'size': 100, 'done': 10};
+    await s.refresh();
+    expect(result(shareIds: ['library']), 'Up to date', reason: 'the folder being fetched is not one of shareIds');
+    r.sync.shares.add({'id': 'indexes', 'name': 'Search indexes', 'path': '/support/shared-indexes', 'with': null});
+    r.sync.peers.first['fetching'] = {'share': 'indexes', 'size': 100, 'done': 10};
+    await s.refresh();
+    expect(result(), 'Up to date', reason: 'an always-shared folder does not count');
+    r.sync.peers.first['fetching'] = {'share': 'elsewhere', 'size': 100, 'done': 10};
+    await s.refresh();
+    expect(result(), 'Up to date', reason: 'a folder this device does not share does not count');
+
+    // (d) asking about p2 while p1 is the one fetching.
+    r.sync.peers.first['fetching'] = {'share': shared, 'size': 100, 'done': 10};
+    await s.refresh();
+    expect(result(peer: 'p2'), 'Up to date', reason: 'another device is fetching, not this one');
     s.dispose();
     await r.dir.delete(recursive: true);
   });

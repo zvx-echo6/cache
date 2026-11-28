@@ -1,0 +1,142 @@
+//! Speed classes (design 2b): how a link's round trip time, first-hop bitrate and measured rate decide Fast, Medium or Slow,
+//! and how a device keeps the judgments for its linked devices.
+
+use std::time::Duration;
+
+use cache_rns::speed::{classify, Speed, Speeds};
+use iroh::SecretKey;
+
+#[test]
+fn the_thresholds_are_the_designs() {
+    // Fast: RTT under 300 ms (and a rate over 1 MB/s once there is one).
+    assert_eq!(classify(Some(20), None, None), Speed::Fast);
+    assert_eq!(classify(Some(299), None, None), Speed::Fast);
+    assert_eq!(classify(Some(300), None, None), Speed::Medium);
+    assert_eq!(classify(Some(1499), None, None), Speed::Medium);
+    assert_eq!(classify(Some(1500), None, None), Speed::Slow);
+    assert_eq!(classify(Some(20), Some(2_000_000.0), None), Speed::Fast);
+    assert_eq!(classify(Some(20), Some(1_000_001.0), None), Speed::Fast);
+    // Medium: a rate over 20 KB/s; Slow: under it.
+    assert_eq!(classify(Some(20), Some(900_000.0), None), Speed::Medium);
+    assert_eq!(classify(Some(20), Some(20_000.0), None), Speed::Medium);
+    assert_eq!(classify(Some(20), Some(19_999.0), None), Speed::Slow);
+    // A first hop under 100 kbit/s is Slow whatever else says; the slower guess wins.
+    assert_eq!(classify(Some(20), None, Some(99_999)), Speed::Slow);
+    assert_eq!(classify(Some(20), None, Some(100_000)), Speed::Fast);
+    assert_eq!(classify(Some(20), None, Some(10_000_000)), Speed::Fast);
+    assert_eq!(classify(Some(1000), Some(5_000_000.0), Some(10_000_000)), Speed::Medium);
+    // Nothing known: the class of a path nothing is known against (iroh counts as fast).
+    assert_eq!(classify(None, None, None), Speed::Fast);
+    assert_eq!(Speed::Slow.as_str(), "slow");
+    assert_eq!(Speed::Medium.as_str(), "medium");
+    assert_eq!(Speed::Fast.as_str(), "fast");
+    assert!(Speed::Slow < Speed::Medium && Speed::Medium < Speed::Fast);
+    // What a class carries: any file on Fast, up to 10 MiB on Medium, none on Slow (the 8 KB inline cap is a later step).
+    assert!(Speed::Fast.carries_file(1 << 40));
+    assert!(Speed::Medium.carries_file(10 * 1024 * 1024));
+    assert!(!Speed::Medium.carries_file(10 * 1024 * 1024 + 1));
+    assert!(!Speed::Slow.carries_file(0) && !Speed::Slow.carries_file(8 * 1024));
+    assert_eq!(Speed::Fast.window_chunks(), Some(16 * 1024));
+    assert_eq!(Speed::Medium.window_chunks(), Some(1024));
+    assert_eq!(Speed::Slow.window_chunks(), None);
+}
+
+#[test]
+fn a_device_judges_each_linked_device_from_what_it_has_seen() {
+    let t = Speeds::new();
+    let (a, b) = (SecretKey::generate().public(), SecretKey::generate().public());
+    assert_eq!(t.ask_speed(&a), Speed::Fast, "nothing known yet");
+    // The link this device opened to A has a long round trip; B is untouched.
+    t.set_opened_rtt(&a, 2000);
+    assert_eq!(t.ask_speed(&a), Speed::Slow);
+    assert_eq!(t.ask_speed(&b), Speed::Fast);
+    // What this device answers is judged by the link the other device opened, not by the one this device opened.
+    assert_eq!(t.serve_speed(&a), Speed::Slow, "with no link of A's own, the one it opened says");
+    t.set_accepted_rtt(&a, 400);
+    assert_eq!(t.serve_speed(&a), Speed::Medium);
+    assert_eq!(t.ask_speed(&a), Speed::Slow);
+    // A later small request's time is the newer measurement (the path changed under an idle link).
+    t.note_probe(&a, 20);
+    assert_eq!(t.ask_speed(&a), Speed::Fast);
+    t.note_probe(&a, 1800);
+    assert_eq!(t.ask_speed(&a), Speed::Slow);
+}
+
+#[test]
+fn the_first_hop_and_the_measured_rate_lower_a_class() {
+    let t = Speeds::new();
+    let a = SecretKey::generate().public();
+    t.set_opened_rtt(&a, 20);
+    assert_eq!(t.ask_speed(&a), Speed::Fast);
+    // A transfer of 4 MiB in 10 s is about 420 KB/s: Medium.
+    t.note_transfer(&a, 4 * 1024 * 1024, Duration::from_secs(10));
+    assert_eq!(t.ask_speed(&a), Speed::Medium);
+    // Small transfers say nothing about a rate (a 5 KB page is quick or slow by its round trip).
+    let b = SecretKey::generate().public();
+    t.set_opened_rtt(&b, 20);
+    t.note_transfer(&b, 5 * 1024, Duration::from_secs(1));
+    assert_eq!(t.ask_speed(&b), Speed::Fast);
+    // 1 MiB in 100 s is about 10 KB/s: Slow.
+    let c = SecretKey::generate().public();
+    t.set_opened_rtt(&c, 20);
+    t.note_transfer(&c, 1024 * 1024, Duration::from_secs(100));
+    assert_eq!(t.ask_speed(&c), Speed::Slow);
+    // A first hop under 100 kbit/s: Slow before any measurement; it applies to what is answered too.
+    let d = SecretKey::generate().public();
+    t.set_opened_rtt(&d, 20);
+    t.set_accepted_rtt(&d, 20);
+    t.set_first_hop(&d, Some(1200));
+    assert_eq!(t.ask_speed(&d), Speed::Slow);
+    assert_eq!(t.serve_speed(&d), Speed::Slow);
+    t.set_first_hop(&d, None);
+    assert_eq!(t.ask_speed(&d), Speed::Fast);
+}
+
+#[test]
+fn what_the_other_device_refused_as_too_slow_holds_until_this_device_measures_again() {
+    let t = Speeds::new();
+    let a = SecretKey::generate().public();
+    t.set_opened_rtt(&a, 20);
+    assert_eq!(t.ask_speed(&a), Speed::Fast);
+    // The slower of the two judgments wins: the other device said Slow.
+    t.note_refused(&a);
+    assert_eq!(t.ask_speed(&a), Speed::Slow);
+    // A new link, or a fresh measurement, clears it.
+    t.note_probe(&a, 20);
+    assert_eq!(t.ask_speed(&a), Speed::Fast);
+    t.note_refused(&a);
+    t.set_opened_rtt(&a, 20);
+    assert_eq!(t.ask_speed(&a), Speed::Fast);
+}
+
+#[test]
+fn two_windows_in_a_row_under_the_class_floor_cancel_a_transfer() {
+    use cache_rns::speed::{takes_too_long, WindowWatch};
+    let mib = 1024 * 1024u64;
+    // Medium: the floor is 20 KB/s, so a 1 MiB window in 60 s (17 KB/s) is under it.
+    let mut w = WindowWatch::default();
+    assert!(!w.done(Speed::Medium, mib, Duration::from_secs(60)), "one slow window does not cancel");
+    assert!(w.done(Speed::Medium, mib, Duration::from_secs(60)), "two in a row do");
+    // A window at or over the floor in between starts the count again.
+    let mut w = WindowWatch::default();
+    assert!(!w.done(Speed::Medium, mib, Duration::from_secs(60)));
+    assert!(!w.done(Speed::Medium, mib, Duration::from_secs(10)));
+    assert!(!w.done(Speed::Medium, mib, Duration::from_secs(60)));
+    assert!(w.done(Speed::Medium, mib, Duration::from_secs(60)));
+    // Fast: the floor is 1 MB/s; 16 MiB in 20 s (0.84 MB/s) is under it, 16 MiB in 10 s is not.
+    let mut w = WindowWatch::default();
+    assert!(!w.done(Speed::Fast, 16 * mib, Duration::from_secs(20)));
+    assert!(w.done(Speed::Fast, 16 * mib, Duration::from_secs(20)));
+    let mut w = WindowWatch::default();
+    assert!(!w.done(Speed::Fast, 16 * mib, Duration::from_secs(10)));
+    assert!(!w.done(Speed::Fast, 16 * mib, Duration::from_secs(10)));
+    // A Slow link carries no file, so it has no floor to be under.
+    assert!(!WindowWatch::default().done(Speed::Slow, mib, Duration::from_secs(600)));
+    // The one minute rule: a window that would take over the budget at the measured rate.
+    assert!(takes_too_long(16 * mib, 200_000.0, Duration::from_secs(60)), "16 MiB at 200 KB/s is 84 s");
+    assert!(!takes_too_long(16 * mib, 400_000.0, Duration::from_secs(60)), "16 MiB at 400 KB/s is 42 s");
+    let s = Speeds::new();
+    assert_eq!(s.window_budget(), Duration::from_secs(60));
+    s.set_window_budget(Duration::from_secs(3));
+    assert_eq!(s.window_budget(), Duration::from_secs(3));
+}

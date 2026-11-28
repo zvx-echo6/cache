@@ -9,7 +9,10 @@ import '../../guide/place_link.dart' show LinkText;
 /// and API keys while they go. The device it is chosen on is where settings come from. On the device that follows the other's
 /// settings, the middle choice says so ("Follows Desk's settings").
 class DeviceSettingsSection extends StatelessWidget {
-  const DeviceSettingsSection({super.key, required this.sync, required this.peer, required this.name, this.known = true, this.busy = false});
+  const DeviceSettingsSection({super.key, required this.sync, required this.peer, required this.name, this.known = true, this.busy = false, this.label = 'Settings'});
+
+  /// The heading over the choices (a device's page calls it "This link").
+  final String label;
 
   final SettingsSync sync;
   final String peer;
@@ -55,7 +58,7 @@ class DeviceSettingsSection extends StatelessWidget {
         return Column(
           crossAxisAlignment: CrossAxisAlignment.stretch,
           children: [
-            const GroupLabel('Settings'),
+            GroupLabel(label),
             SettingsGroup(
               rows: [
                 choice('match', SettingsLink.match, 'Match both ways', 'Changes on either device go to both.'),

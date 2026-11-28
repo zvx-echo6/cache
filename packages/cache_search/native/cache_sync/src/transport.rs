@@ -31,13 +31,15 @@ use crate::{closed_403, closed_code, is_no_space, now_ms, GateState, MAX_INDEX, 
 pub type BoxFut<'a, T> = Pin<Box<dyn Future<Output = T> + Send + 'a>>;
 pub type BoxStream<T> = Pin<Box<dyn Stream<Item = T> + Send>>;
 
-/// The two things one linked device asks another.
+/// The three things one linked device asks another.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Ask {
     /// Its index (all shares).
     Index,
     /// The secrets it holds for the asking device.
     Secrets,
+    /// Its entry points (the rnsds the person entered, with their passphrases), removals included. Only a linked device is answered.
+    Entries,
 }
 
 impl Ask {
@@ -45,8 +47,74 @@ impl Ask {
         match self {
             Ask::Index => b"index",
             Ask::Secrets => b"secrets",
+            Ask::Entries => b"entries",
         }
     }
+}
+
+/// The two requests that replace asking for a whole file list (Reticulum only; iroh's `SYNC_ALPN` is as it was).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Delta {
+    /// Everything the file list says except the entries, and for each shared folder its epoch, counter and fingerprint.
+    Summary,
+    /// The changes of one folder after a cursor, in a page (the request is a [`crate::delta::DiffAsk`]).
+    Diff,
+}
+
+/// The class of a link (design 2b): how fast the path to a linked device is, which decides what is sent over it. A path nothing
+/// is known against, and every iroh path, is Fast. Kept apart from cache_rns's own type because cache_rns is not built on every
+/// platform; the two agree on the numbers (a test in `rns_transport` says so).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub enum Speed {
+    Slow,
+    Medium,
+    Fast,
+}
+
+/// The largest file a Medium link carries.
+pub const MEDIUM_MAX_FILE: u64 = 10 * 1024 * 1024;
+/// The page of differences on a Slow link (the review of the step 3 plan, and design 2b: pages of 4 KB or less).
+pub const SLOW_PAGE_BYTES: usize = 4 * 1024;
+/// The page of differences on a Medium link by default (tunable with [`crate::Config::medium_page_bytes`]): about 3 s at the 20 KB/s floor.
+pub const MEDIUM_PAGE_BYTES: usize = 64 * 1024;
+
+impl Speed {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Speed::Slow => "slow",
+            Speed::Medium => "medium",
+            Speed::Fast => "fast",
+        }
+    }
+
+    /// A file of `size` bytes may go over a link of this class: any on Fast, up to 10 MiB on Medium, none on Slow (files go there
+    /// only inline with their entry when they are 8 KB or less, [`crate::delta::INLINE_MAX`]).
+    pub fn carries_file(self, size: u64) -> bool {
+        match self {
+            Speed::Fast => true,
+            Speed::Medium => size <= MEDIUM_MAX_FILE,
+            Speed::Slow => false,
+        }
+    }
+}
+
+/// What a link too slow for what was asked fails with: not a failure of the device, the item waits for a faster link.
+pub const TOO_SLOW_TEXT: &str = "the connection is too slow for this";
+
+#[derive(Debug)]
+pub struct TooSlow;
+
+impl std::fmt::Display for TooSlow {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(TOO_SLOW_TEXT)
+    }
+}
+
+impl std::error::Error for TooSlow {}
+
+/// Whether `e` is a [`TooSlow`].
+pub fn is_too_slow(e: &anyhow::Error) -> bool {
+    e.chain().any(|c| c.downcast_ref::<TooSlow>().is_some())
 }
 
 /// One step of a file fetch.
@@ -56,6 +124,29 @@ pub enum FetchEvent {
     Progress(u64),
     /// The fetch failed; [`NO_SPACE`] for a full disk.
     Failed(String),
+    /// The link is too slow for this file (either end's judgment): not a failure, the file waits for a faster link.
+    Waiting(String),
+    /// The file is bigger than the cap of the entry point the link goes through (either end's judgment): not a failure, it waits
+    /// for another way.
+    OverCap(String),
+}
+
+/// Where a pairing hello goes: the iroh address from the link code, and the Reticulum destination (32 hex characters) when
+/// the code carries one.
+#[derive(Debug, Clone)]
+pub struct PairTarget {
+    pub iroh: EndpointAddr,
+    pub rns: Option<String>,
+}
+
+/// Where one entry point stands, as the network says it ([`Transport::entry_status`]).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct EntryStatus {
+    pub id: String,
+    /// `"off"`, `"connecting"`, `"connected"`, `"not_answering"` or `"nothing_heard"`.
+    pub state: &'static str,
+    /// When that was looked at, in ms since the Unix epoch.
+    pub checked: u64,
 }
 
 /// What the engine asks of the network.
@@ -66,13 +157,106 @@ pub trait Transport: Send + Sync + 'static {
     /// connection, `closed` is set to its close code (403 "not linked", 409, 503), whichever step met it.
     fn ask<'a>(&'a self, peer: &'a str, ask: Ask, closed: &'a AtomicU32) -> BoxFut<'a, Result<(Vec<u8>, String)>>;
     /// Sends a pairing hello to the device at `to` (from its link code); its answer.
-    fn pair(&self, to: EndpointAddr, hello: Vec<u8>) -> BoxFut<'_, Result<Vec<u8>>>;
-    /// The address that goes in this device's link code.
-    fn link_addr(&self) -> BoxFut<'_, EndpointAddr>;
+    fn pair(&self, to: PairTarget, hello: Vec<u8>) -> BoxFut<'_, Result<Vec<u8>>>;
+    /// The addresses that go in this device's link code: the iroh address and, when Reticulum runs, its destination (hex).
+    fn link_addr(&self) -> BoxFut<'_, (EndpointAddr, Option<String>)>;
+    /// This device's Reticulum destination (hex) and the device key's signature over it (hex), when Reticulum runs. What
+    /// a pairing and an index carry, so the other device learns where to reach this one.
+    fn rns_info(&self) -> Option<(String, String)> {
+        None
+    }
+    /// A linked device's Reticulum destination and signature, as it gave them: stored for use when the signature is the
+    /// device's own. False when it is not (or Reticulum is not running on this device).
+    fn learn_rns(&self, _peer: &str, _dest: &str, _sig: &str) -> bool {
+        false
+    }
+    /// A summary or differences request to a linked device (`body`: empty for a summary); the answer and how it was reached. Only
+    /// where the network can carry it (Reticulum): anywhere else it fails at once, and the engine asks for the whole list.
+    fn ask_delta<'a>(&'a self, _peer: &'a str, _what: Delta, _body: Vec<u8>, _closed: &'a AtomicU32) -> BoxFut<'a, Result<(Vec<u8>, String)>> {
+        Box::pin(async { Err(anyhow!("not carried on this network")) })
+    }
+    /// "Folder F is at counter N" (`body`) to a linked device, over Reticulum only: the device that gets it asks for a summary.
+    /// Fails at once where the network cannot carry it (iroh: no notices) or the device is not reachable.
+    fn send_notice<'a>(&'a self, _peer: &'a str, _body: Vec<u8>) -> BoxFut<'a, Result<()>> {
+        Box::pin(async { Err(anyhow!("not carried on this network")) })
+    }
+    /// Whether the device was last reached over Reticulum and a path to it is known now.
+    fn reached_over_rns(&self, _peer: &str) -> bool {
+        false
+    }
+    /// The class of the link to a linked device, for what this device asks of it. iroh paths count as Fast.
+    fn speed(&self, _peer: &str) -> Speed {
+        Speed::Fast
+    }
+    /// Measures the link to a linked device now with a small request, and says whether a new link came up since the last call
+    /// (a held back item resumes on that when its class now allows it). Nothing over iroh.
+    fn measure(&self, _peer: &str) -> BoxFut<'_, bool> {
+        Box::pin(async { false })
+    }
+    /// A number that changes when an interface of this device comes up or goes down (a held back item resumes on that). Nothing
+    /// over iroh.
+    fn interface_gen(&self) -> u64 {
+        0
+    }
+    /// Tests only: the link to `peer` drops (the next request makes a new one).
+    #[cfg(feature = "test-hooks")]
+    fn test_relink(&self, _peer: &str) {}
+    /// Tests only: another network interface comes up on this device.
+    #[cfg(feature = "test-hooks")]
+    fn test_attach_iface(&self) {}
+    /// Tests only: the hops the routing table gives for the Reticulum destination `dest_hex` (none: no route, or no Reticulum).
+    #[cfg(feature = "test-hooks")]
+    fn test_route_hops(&self, _dest_hex: &str) -> BoxFut<'_, Option<u8>> {
+        Box::pin(async { None })
+    }
+    /// Pairs with a short link code: finds a path to the Reticulum destination `dest_hex` (a routed path may take a while),
+    /// opens a link and sends `body` to its pairing path; the answer. Over Reticulum only: a short code carries no iroh address.
+    fn pair_short(&self, _dest_hex: &str, _body: Vec<u8>) -> BoxFut<'_, Result<Vec<u8>>> {
+        Box::pin(async { Err(anyhow!(NO_REACH)) })
+    }
+    /// Whether `sig` (hex) is the device key `key`'s signature over the Reticulum destination `dest` (hex). Stores nothing.
+    fn verify_rns(&self, _key: &str, _dest: &str, _sig: &str) -> bool {
+        false
+    }
+    /// Lets iroh reach a device at the address it gave in a pairing (a short code carries none).
+    fn learn_iroh(&self, _addr: EndpointAddr) {}
+    /// Makes the entry points (rnsds the person entered) the ones listed: on the running network, never a restart. Only Reticulum
+    /// has any; elsewhere this does nothing.
+    fn set_entry_points(&self, _entries: Vec<crate::entries::EntryPoint>) {}
+    /// Whether a file of `size` is more than the entry point `peer` is reached through takes (its cap): the file waits for another way.
+    /// False where the device is not reached through an entry point (iroh, Wi-Fi, other Reticulum interfaces) or the entry has no cap.
+    fn over_cap(&self, _peer: &str, _size: u64) -> bool {
+        false
+    }
+    /// Where each entry point stands (none where there is no Reticulum).
+    fn entry_status(&self) -> Vec<EntryStatus> {
+        Vec::new()
+    }
+    /// Outbound IP permission is independent of whether a local carrier may keep syncing.
+    fn ip_allowed(&self) -> bool { true }
+    fn set_ip_allowed(&self, _on: bool) -> BoxFut<'_, Result<()>> {
+        Box::pin(async { Ok(()) })
+    }
+    /// Creates the mobile BLE session after permission. Android starts its GATT adapter separately; iOS owns it in Rust.
+    fn bluetooth_start(&self) -> Result<u64> {
+        Err(anyhow!("Bluetooth peering is not available on this device"))
+    }
+    /// Revokes native callbacks and detaches the BLE fleet. Idempotent.
+    fn bluetooth_stop(&self) {}
+    /// The current session, so a platform adapter can notice a Reticulum restart and replace its old callback handle.
+    fn bluetooth_handle(&self) -> Option<u64> {
+        None
+    }
+    fn bluetooth_peers(&self) -> usize { 0 }
+    fn bluetooth_ready(&self) -> Option<bool> { None }
+    fn bluetooth_error(&self) -> Option<String> { None }
     /// Lets a device connect (linked, or about to be).
     fn allow(&self, peer: &str);
     /// Stops letting a device connect.
     fn disallow(&self, peer: &str);
+    /// The devices this one used to be linked with and is not linked with now (ids): over Reticulum, one of them that asks is told
+    /// "not linked" instead of not being answered at all. The whole list each time. iroh has its own Gate and ignores it.
+    fn set_former(&self, _ids: &[String]) {}
     /// Fetches `hash` into `store` from any of `providers`. Dropping the stream ends the fetch; what arrived stays where the
     /// transport keeps partial data and resumes from there. When the stream ends without a failure the whole file is in `store`.
     fn fetch<'a>(&'a self, store: &'a Store, hash: Hash, providers: Vec<String>) -> BoxFut<'a, Result<BoxStream<FetchEvent>>>;
@@ -84,16 +268,87 @@ pub trait Transport: Send + Sync + 'static {
     fn port(&self) -> Option<u16>;
     /// Stops accepting and closes connections.
     fn shutdown(&self) -> BoxFut<'_, ()>;
+    /// Nearby linking: the link-code page opened (this device's name and kind, as it tells a device that asks).
+    fn pairing_open(&self, _name: String, _kind: Option<String>) -> BoxFut<'_, Result<()>> {
+        Box::pin(async { Err(anyhow!("Nearby linking needs Reticulum, which is not running on this device")) })
+    }
+    /// Nearby linking: the page closed.
+    fn pairing_close(&self) -> BoxFut<'_, ()> {
+        Box::pin(async {})
+    }
+    /// Nearby linking: `{"devices": [{id, name, kind, via}]}`.
+    fn nearby_list(&self) -> serde_json::Value {
+        serde_json::json!({"devices": []})
+    }
+    /// Nearby linking: `{state, name, kind, words, reason}`.
+    fn nearby_state(&self) -> serde_json::Value {
+        serde_json::json!({"state": "idle", "name": null, "kind": null, "words": [], "reason": null})
+    }
+    /// Nearby linking: Link was tapped on a listed device.
+    fn nearby_link(&self, _id: String, _name: String, _kind: Option<String>) -> BoxFut<'_, Result<()>> {
+        Box::pin(async { Err(anyhow!("Nearby linking needs Reticulum, which is not running on this device")) })
+    }
+    /// Tests only: moves the clock Nearby's 60 second and one minute waits run on.
+    fn skew_clock(&self, _ms: u64) {}
+    /// Nearby linking: Link (`true`) or Cancel on the three words.
+    fn nearby_answer(&self, _ok: bool) -> BoxFut<'_, Result<()>> {
+        Box::pin(async { Err(anyhow!("Nearby linking needs Reticulum, which is not running on this device")) })
+    }
 }
+
+/// What a person is told when a short code's other device cannot be reached.
+pub const NO_REACH: &str = "Could not reach the other device. Check both are on the same network, or connected to the internet through the same hub.";
 
 /// What the network asks of the engine.
 pub trait Serve: Send + Sync + 'static {
     /// A pairing hello from `peer` (any device, not linked yet): the answer to send back.
     fn pair_hello(&self, peer: &str, hello: &[u8]) -> Vec<u8>;
+    /// A pairing request over Reticulum with a short link code's secret (`{secret, hello}`): the answer to send back.
+    fn pair_short(self: Arc<Self>, body: Vec<u8>) -> BoxFut<'static, Vec<u8>>;
     /// A linked device asks (it holds the link, so this confirms it): the answer to send back.
     fn answer(self: Arc<Self>, peer: String, ask: Ask) -> BoxFut<'static, Vec<u8>>;
+    /// A linked device asks for a summary or differences: the answer to send back.
+    fn answer_delta(self: Arc<Self>, peer: String, what: Delta, body: Vec<u8>) -> BoxFut<'static, Vec<u8>>;
+    /// The most one page of differences may carry over a link of class `speed` (the asker may ask for less).
+    fn page_cap(&self, speed: Speed) -> usize {
+        match speed {
+            Speed::Fast => crate::delta::PAGE_BYTES,
+            Speed::Medium => MEDIUM_PAGE_BYTES,
+            Speed::Slow => SLOW_PAGE_BYTES,
+        }
+    }
+    /// A window of the file `hash` is about to be served to `peer` over a link of class `speed`: false when this file's kind may
+    /// not go over it (the big kinds on a Medium link).
+    fn blob_allowed(&self, _peer: &str, _hash: &str, _speed: Speed) -> bool {
+        true
+    }
+    /// A window of the file `hash` was refused to `peer`: the file is bigger than the cap of the entry point its route comes in through.
+    fn refused_over_cap(&self, _peer: &str, _hash: &str) {}
+    /// Tests only: every window is refused as too slow.
+    #[cfg(feature = "test-hooks")]
+    fn test_refuse_blobs(&self) -> bool {
+        false
+    }
     /// After an index answer has been taken: the asking device may have changes too.
     fn asked(&self, peer: &str);
+    /// A Reticulum link to or from a linked device closed (cache_rns says why): the app's log says it.
+    fn link_closed(&self, _peer: &str, _reason: &str, _open_secs: Option<u64>, _rtt_ms: Option<u64>) {}
+    /// A linked device's route over Reticulum now goes through another entry point or interface (`from`: what taught it).
+    fn route_moved(&self, _peer: &str, _now: &str, _was: &str, _from: &str) {}
+    /// A linked device says a folder changed (`body`: [`crate::delta::Notice`]); the answer to send back.
+    fn notice(&self, _peer: &str, _body: &[u8]) -> Vec<u8> {
+        b"ok".to_vec()
+    }
+    /// A linked device is reachable again over Reticulum.
+    fn reachable(&self, _peer: &str) {}
+    /// A linked device asked for a window of the blob `hash`: the byte just past the window.
+    fn served(&self, _peer: &str, _hash: &str, _end: u64) {}
+    /// Whether the file store may be served over Reticulum yet.
+    fn blobs_ready(&self) -> bool {
+        true
+    }
+    /// A Nearby link both people confirmed, with the other device's destination and signature (hex): keep it.
+    fn nearby_linked(&self, peer: &str, name: &str, dest: &str, sig: &str);
 }
 
 /// Refuses every connection from a key that is not linked, except on the linking protocol (which wants the one-time code).
@@ -116,7 +371,10 @@ impl EndpointHooks for Gate {
 
 /// iroh: the network Cache has used since 1.0.
 pub struct IrohTransport {
+    ip_policy: crate::ip_policy::IpPolicy,
     endpoint: Endpoint,
+    /// Addresses given in a pairing (a short link code has none), for iroh to connect with later.
+    known: iroh::address_lookup::MemoryLookup,
     allowed: Arc<RwLock<HashSet<EndpointId>>>,
     router: Mutex<Option<Router>>,
     /// The iroh-blobs view that files are served from and downloaded into (see [`crate::bridge`]).
@@ -134,7 +392,19 @@ impl IrohTransport {
         let allowed: Arc<RwLock<HashSet<EndpointId>>> =
             Arc::new(RwLock::new(allowed.into_iter().filter_map(|p| p.parse().ok()).collect()));
         let endpoint = builder.hooks(Gate { allowed: allowed.clone(), state: gate }).bind().await.map_err(|e| anyhow!("could not start networking: {e}"))?;
-        Ok(Arc::new(IrohTransport { endpoint, allowed, router: Mutex::new(None), bridge }))
+        let known = iroh::address_lookup::MemoryLookup::new();
+        if let Ok(l) = endpoint.address_lookup() {
+            l.add(known.clone());
+        }
+        Ok(Arc::new(IrohTransport { ip_policy: Default::default(), endpoint, known, allowed, router: Mutex::new(None), bridge }))
+    }
+
+    /// The iroh address for a link code (waits a few seconds for the endpoint to be online).
+    pub(crate) async fn iroh_addr(&self) -> EndpointAddr {
+        if self.ip_policy.allowed() {
+            let _ = tokio::time::timeout(Duration::from_secs(5), self.endpoint.online()).await;
+        }
+        self.endpoint.addr()
     }
 
     /// Starts accepting: the blob protocol from `store`, pairing and sync answered by `serve`.
@@ -155,7 +425,7 @@ impl Transport for IrohTransport {
     }
 
     fn ask<'a>(&'a self, peer: &'a str, ask: Ask, closed: &'a AtomicU32) -> BoxFut<'a, Result<(Vec<u8>, String)>> {
-        Box::pin(async move {
+        Box::pin(self.ip_policy.run(async move {
             // The close code of the other device's Gate, whichever step meets it (at connect the text carries it; at write or read
             // only the error's source does).
             let seen = |e: &(dyn std::error::Error + 'static)| {
@@ -186,6 +456,7 @@ impl Transport for IrohTransport {
             let (wait, limit, late) = match ask {
                 Ask::Index => (120, MAX_INDEX, "timed out reading the file list"),
                 Ask::Secrets => (30, 1024 * 1024, "timed out reading the keys"),
+                Ask::Entries => (30, 4 * 1024 * 1024, "timed out reading the entry points"),
             };
             let bytes = tokio::time::timeout(Duration::from_secs(wait), recv.read_to_end(limit))
                 .await
@@ -196,12 +467,12 @@ impl Transport for IrohTransport {
                 })?;
             conn.close(0u32.into(), b"done");
             Ok((bytes, via))
-        })
+        }))
     }
 
-    fn pair(&self, to: EndpointAddr, hello: Vec<u8>) -> BoxFut<'_, Result<Vec<u8>>> {
-        Box::pin(async move {
-            let conn = tokio::time::timeout(Duration::from_secs(45), self.endpoint.connect(to, PAIR_ALPN))
+    fn pair(&self, to: PairTarget, hello: Vec<u8>) -> BoxFut<'_, Result<Vec<u8>>> {
+        Box::pin(self.ip_policy.run(async move {
+            let conn = tokio::time::timeout(Duration::from_secs(45), self.endpoint.connect(to.iroh, PAIR_ALPN))
                 .await
                 .map_err(|_| anyhow!("the other device did not answer"))?
                 .map_err(|e| anyhow!("could not reach the other device: {e}"))?;
@@ -211,14 +482,15 @@ impl Transport for IrohTransport {
             let bytes = recv.read_to_end(4096).await.map_err(|e| anyhow!("{e}"))?;
             conn.close(0u32.into(), b"done");
             Ok(bytes)
-        })
+        }))
     }
 
-    fn link_addr(&self) -> BoxFut<'_, EndpointAddr> {
-        Box::pin(async move {
-            let _ = tokio::time::timeout(Duration::from_secs(5), self.endpoint.online()).await;
-            self.endpoint.addr()
-        })
+    fn link_addr(&self) -> BoxFut<'_, (EndpointAddr, Option<String>)> {
+        Box::pin(async move { (self.iroh_addr().await, None) })
+    }
+
+    fn learn_iroh(&self, addr: EndpointAddr) {
+        self.known.add_endpoint_info(addr);
     }
 
     fn allow(&self, peer: &str) {
@@ -234,7 +506,7 @@ impl Transport for IrohTransport {
     }
 
     fn fetch<'a>(&'a self, store: &'a Store, hash: Hash, providers: Vec<String>) -> BoxFut<'a, Result<BoxStream<FetchEvent>>> {
-        Box::pin(async move {
+        Box::pin(self.ip_policy.run(async move {
             let providers: Vec<EndpointId> = providers.iter().filter_map(|p| p.parse().ok()).collect();
             let strategy = if providers.len() > 1 { SplitStrategy::Split } else { SplitStrategy::None };
             // Downloads land in the bridge's view; when one is whole it is moved into `store`.
@@ -271,8 +543,15 @@ impl Transport for IrohTransport {
                 }
             })
             .filter_map(|x| x);
-            Ok(Box::pin(events.chain(land)) as BoxStream<FetchEvent>)
-        })
+            Ok(self.ip_policy.stream(Box::pin(events.chain(land)) as BoxStream<FetchEvent>))
+        }))
+    }
+
+    fn ip_allowed(&self) -> bool { self.ip_policy.allowed() }
+
+    fn set_ip_allowed(&self, on: bool) -> BoxFut<'_, Result<()>> {
+        self.ip_policy.set(on);
+        Box::pin(async { Ok(()) })
     }
 
     fn network_change(&self) -> BoxFut<'_, ()> {
@@ -338,7 +617,11 @@ impl ProtocolHandler for SyncProto {
         let (mut send, mut recv) = conn.accept_bi().await?;
         let ask = recv.read_to_end(64).await.map_err(AcceptError::from_err)?;
         let peer = conn.remote_id().to_string();
-        let what = if ask == b"secrets" { Ask::Secrets } else { Ask::Index };
+        let what = match ask.as_slice() {
+            b"secrets" => Ask::Secrets,
+            b"entries" => Ask::Entries,
+            _ => Ask::Index,
+        };
         let body = self.0.clone().answer(peer.clone(), what).await;
         send.write_all(&body).await.map_err(AcceptError::from_err)?;
         send.finish()?;

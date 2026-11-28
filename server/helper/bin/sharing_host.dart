@@ -203,6 +203,10 @@ class SharingHost {
         'gate': await _gates(),
         // Folders kept only with some linked devices (the Bookshelves log with Match devices, the settings log with Match and Send mine).
         'with': {for (final l in table.links) l.id: l.modes},
+        // Reticulum's Wi-Fi discovery on Cache on Linux (a peer it finds says `via: 'wifi'`); needs no lock and no open port.
+        'reticulum': true,
+        // What the Nearby name request says this device is.
+        'device_kind': 'computer',
         // The second copy of the device's key, outside the sync folder: a key gone from <data>/sync comes back from it, so the
         // server keeps its id and its links (the Rust server's book builder reads the same pair, server/src/libbuild/booklog.rs).
         // Linux has no install marker (no phone backups travel here), so the copy is used without an install-id check.
@@ -627,7 +631,10 @@ class SharingHost {
   /// `key_names` and `set_key_on` are not the engine's: the host answers them itself, from [keyNames] and [setKeyOn] (the settings
   /// sync's key list and tick). They give a browser the names of the keys that can go to a linked device and which are ticked, and
   /// take a tick; a key's value is in neither.
-  static const Set<String> browserMethods = {'link_code', 'unlink', 'set_name', 'set_peer_name', 'set_link', 'sync_now', 'share_items', 'key_names', 'set_key_on', 'set_include_keys'};
+  static const Set<String> browserMethods = {'link_code', 'unlink', 'set_name', 'set_peer_name', 'set_link', 'sync_now', 'share_items', 'key_names', 'set_key_on', 'set_include_keys', ...nearbyMethods};
+
+  /// The Nearby linking calls (while a browser's "Show my link code" page is open): the device's own say, like the rest.
+  static const Set<String> nearbyMethods = {'pairing_open', 'pairing_close', 'nearby_list', 'nearby_link', 'nearby_state', 'nearby_answer'};
 
   /// The names of keys that can sync and the devices each is ticked for (`[{name, on: [device ids]}]`), set by the helper.
   List<Map<String, Object?>> Function()? keyNames;

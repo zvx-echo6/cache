@@ -85,7 +85,7 @@ Future<void> _checkOrder(WidgetTester tester, _Rig r, Finder button) async {
   await _settle(tester);
   expect(_Rig.order, ['pass:start'], reason: 'the pass runs first and the round waits for it');
   expect(r.sync.argsOf['sync_now'], isNull);
-  expect(find.byWidgetPredicate((w) => w is TextButton && w.onPressed == null), findsWidgets, reason: 'the tap shows something at once');
+  expect(find.byWidgetPredicate((w) => (w is TextButton && w.onPressed == null) || (w is FilledButton && w.onPressed == null)), findsWidgets, reason: 'the tap shows something at once');
   r.gate.complete();
   await _settle(tester);
   expect(_Rig.order, ['pass:start', 'pass:end', 'round'], reason: 'the pass finishes before the round starts');

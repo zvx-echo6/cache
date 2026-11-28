@@ -1,10 +1,13 @@
 package com.happylittlellc.cache
 
 import android.Manifest
+import android.app.Activity
 import android.app.ActivityManager
+import android.app.KeyguardManager
 import android.content.Intent
 import android.content.pm.PackageManager
 import android.content.Context
+import android.net.wifi.WifiManager
 import android.os.Bundle
 import androidx.core.view.ViewCompat
 import androidx.core.view.WindowCompat
@@ -18,6 +21,7 @@ import com.happylittlellc.cache.car.GeoView
 import com.happylittlellc.cache.car.NavIntent
 import com.happylittlellc.cache.car.SharedEngine
 import com.happylittlellc.cache.fgs.FgsAddArm
+import com.happylittlellc.cache.reticulum.BlePlugin
 import io.flutter.plugin.common.MethodChannel
 
 class MainActivity : FlutterActivity() {
@@ -188,12 +192,14 @@ class MainActivity : FlutterActivity() {
     private var routeSnapshot: RouteSnapshot? = null
     private var pending: MethodChannel.Result? = null
     private var pendingNotifications: MethodChannel.Result? = null
+    private var pendingLock: MethodChannel.Result? = null
 
     // Recent Android versions let the user switch network access (INTERNET) off, and an app updated from a build
     // that never asked for it does not get it; opening even the map's tile server port on this phone then fails.
     // The map screen asks through this channel when that happens.
     override fun configureFlutterEngine(flutterEngine: FlutterEngine) {
         super.configureFlutterEngine(flutterEngine)
+        if (!flutterEngine.plugins.has(BlePlugin::class.java)) flutterEngine.plugins.add(BlePlugin())
         linkChannel = MethodChannel(flutterEngine.dartExecutor.binaryMessenger, "co.cache/link").also {
             it.setMethodCallHandler { call, result ->
                 when (call.method) {
@@ -250,7 +256,36 @@ class MainActivity : FlutterActivity() {
                 }
             }
         }
+        // The phone's own screen lock, asked before a device is unlinked (lib/platform/device_lock.dart): "ok", "cancelled", or
+        // "none" when no lock is set. The system's confirm-credential screen, so no extra package.
+        MethodChannel(flutterEngine.dartExecutor.binaryMessenger, "co.cache/device_lock")
+            .setMethodCallHandler { call, result ->
+                when (call.method) {
+                    "confirm" -> confirmDeviceLock(call.argument<String>("title"), call.argument<String>("description"), result)
+                    else -> result.notImplemented()
+                }
+            }
         FgsAddArm.attach(this, flutterEngine.dartExecutor.binaryMessenger)
+        // The Wi-Fi multicast lock: Android drops multicast packets unless an app holds one, and Reticulum's local discovery
+        // (sharing_state.dart) needs them. Taken just before the sharing engine opens and let go when it stops.
+        MethodChannel(flutterEngine.dartExecutor.binaryMessenger, "co.cache/multicast")
+            .setMethodCallHandler { call, result ->
+                when (call.method) {
+                    "acquire" -> {
+                        try {
+                            acquireMulticast()
+                            result.success(true)
+                        } catch (e: Exception) {
+                            result.success(false)
+                        }
+                    }
+                    "release" -> {
+                        releaseMulticast()
+                        result.success(true)
+                    }
+                    else -> result.notImplemented()
+                }
+            }
         CprBeat.attach(this, flutterEngine.dartExecutor.binaryMessenger)
         MethodChannel(flutterEngine.dartExecutor.binaryMessenger, "co.cache/network_access")
             .setMethodCallHandler { call, result ->
@@ -322,12 +357,40 @@ class MainActivity : FlutterActivity() {
         openChannel = null
         MethodChannel(flutterEngine.dartExecutor.binaryMessenger, "cache/bench").setMethodCallHandler(null)
         MethodChannel(flutterEngine.dartExecutor.binaryMessenger, "co.cache/network_access").setMethodCallHandler(null)
+        MethodChannel(flutterEngine.dartExecutor.binaryMessenger, "co.cache/multicast").setMethodCallHandler(null)
+        MethodChannel(flutterEngine.dartExecutor.binaryMessenger, "co.cache/device_lock").setMethodCallHandler(null)
+        pendingLock?.success("cancelled")
+        pendingLock = null
         FgsAddArm.detach(flutterEngine.dartExecutor.binaryMessenger)
         CprBeat.detach(this, flutterEngine.dartExecutor.binaryMessenger)
         routeSnapshot?.dispose()
         routeSnapshot = null
         super.cleanUpFlutterEngine(flutterEngine)
         SharedEngine.activityEnded()
+    }
+
+    private var multicastLock: WifiManager.MulticastLock? = null
+
+    private fun acquireMulticast() {
+        val held = multicastLock
+        if (held != null && held.isHeld) return
+        val wifi = applicationContext.getSystemService(Context.WIFI_SERVICE) as WifiManager
+        val lock = wifi.createMulticastLock("cache-rns")
+        lock.setReferenceCounted(false)
+        lock.acquire()
+        multicastLock = lock
+    }
+
+    private fun releaseMulticast() {
+        val held = multicastLock
+        if (held != null && held.isHeld) held.release()
+        multicastLock = null
+    }
+
+    // A backstop: the lock never outlives the screen that took it.
+    override fun onDestroy() {
+        releaseMulticast()
+        super.onDestroy()
     }
 
     // Android's word that memory is short (the level, and the memory now): the app lets the model go when it is, so it is not
@@ -338,6 +401,33 @@ class MainActivity : FlutterActivity() {
     }
 
     // Battery and heat (co.cache/battery) are answered by the cache_device plugin, in every engine.
+
+    @Suppress("DEPRECATION") // the intent still works on every API; androidx.biometric is not in this app, and none is added
+    private fun confirmDeviceLock(title: String?, description: String?, result: MethodChannel.Result) {
+        if (pendingLock != null) {
+            result.success("cancelled")
+            return
+        }
+        val keyguard = getSystemService(Context.KEYGUARD_SERVICE) as KeyguardManager
+        val intent = if (keyguard.isDeviceSecure) keyguard.createConfirmDeviceCredentialIntent(title, description) else null
+        if (intent == null) {
+            result.success("none")
+            return
+        }
+        pendingLock = result
+        // startActivityForResult below already tells FgsAddArm this leave is the app's own.
+        @Suppress("DEPRECATION")
+        startActivityForResult(intent, REQUEST_CODE_LOCK)
+    }
+
+    @Suppress("DEPRECATION")
+    override fun onActivityResult(requestCode: Int, resultCode: Int, data: Intent?) {
+        super.onActivityResult(requestCode, resultCode, data)
+        if (requestCode == REQUEST_CODE_LOCK) {
+            pendingLock?.success(if (resultCode == Activity.RESULT_OK) "ok" else "cancelled")
+            pendingLock = null
+        }
+    }
 
     private fun notificationsGranted() =
         checkSelfPermission(Manifest.permission.POST_NOTIFICATIONS) == PackageManager.PERMISSION_GRANTED
@@ -360,5 +450,6 @@ class MainActivity : FlutterActivity() {
     companion object {
         private const val REQUEST_CODE = 4210
         private const val REQUEST_CODE_NOTIFICATIONS = 4211
+        private const val REQUEST_CODE_LOCK = 4212
     }
 }

@@ -4,6 +4,17 @@
     <uses-permission android:name="android.permission.INTERNET"/>
     <uses-permission android:name="android.permission.ACCESS_FINE_LOCATION"/>
     <uses-permission android:name="android.permission.ACCESS_COARSE_LOCATION"/>
+    <!-- Nearby BLE peering; requested at runtime when the person enables it. Older Android needs location for scanning. -->
+    <uses-permission android:name="android.permission.BLUETOOTH" android:maxSdkVersion="30"/>
+    <uses-permission android:name="android.permission.BLUETOOTH_ADMIN" android:maxSdkVersion="30"/>
+    <uses-permission android:name="android.permission.BLUETOOTH_SCAN" android:usesPermissionFlags="neverForLocation"/>
+    <uses-permission android:name="android.permission.BLUETOOTH_CONNECT"/>
+    <uses-permission android:name="android.permission.BLUETOOTH_ADVERTISE"/>
+    <uses-feature android:name="android.hardware.bluetooth_le" android:required="false"/>
+    <!-- Scan a link code: the camera, asked only when the person taps "Scan a code" (the camera plugin asks). Not required, so a
+         phone without one can still install Cache and type the code. -->
+    <uses-permission android:name="android.permission.CAMERA"/>
+    <uses-feature android:name="android.hardware.camera" android:required="false"/>
     <!-- Turn-by-turn guidance keeps the position coming with the screen locked: a foreground service of type location, with
          its notification (geolocator runs it). -->
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE"/>
@@ -15,6 +26,8 @@
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_DATA_SYNC"/>
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS"/>
     <uses-permission android:name="android.permission.WAKE_LOCK"/>
+    <!-- Hearing other devices on the same Wi-Fi (Reticulum's local discovery) needs a multicast lock; see MainActivity "co.cache/multicast". -->
+    <uses-permission android:name="android.permission.CHANGE_WIFI_MULTICAST_STATE"/>
     <uses-permission android:name="android.permission.VIBRATE"/>
     <!-- Map tiles are streamed and downloaded when there is a connection. -->
     <uses-permission android:name="android.permission.INTERNET"/>

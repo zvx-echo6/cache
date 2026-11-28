@@ -3,6 +3,7 @@
 import 'dart:io';
 
 import 'package:cache/screens/settings/sharing_page.dart';
+import 'package:cache/screens/settings/widgets.dart' show Tone;
 import 'package:cache/sharing/sharing_state.dart';
 import 'package:cache/theme.dart';
 import 'package:flutter/material.dart';
@@ -26,6 +27,18 @@ void main() {
     // Kept from an earlier session, not looked for yet in this one: told as the past, not as a connection.
     expect(_words({'last_seen': now - 3 * 3600000, 'via': 'relay', 'live': false, 'error': null}), 'Last seen 3 h ago via a relay');
     expect(_words({'last_seen': now - 3 * 3600000, 'via': 'direct', 'live': false, 'error': null}), 'Last seen 3 h ago via direct');
+  });
+
+  test('a device on the same Wi-Fi says so, in the same form as the other connected states', () {
+    expect(_words({'last_seen': now - 1000, 'via': 'wifi', 'error': null}), 'Same Wi-Fi · Last seen just now');
+    final wifi = peerStatus({'last_seen': now, 'via': 'wifi', 'error': null});
+    expect(wifi.first.tone, Tone.ok);
+    expect(peerStatus({'last_seen': now, 'via': 'direct', 'error': null}).first.tone, Tone.ok);
+    expect(peerStatus({'last_seen': now, 'via': 'relay', 'error': null}).first.text, 'Connected through a relay');
+    expect(peerStatus({'last_seen': now, 'via': 'direct', 'error': null}).first.text, 'Connected directly');
+    // Kept from an earlier session: told as the past.
+    expect(_words({'last_seen': now - 3 * 3600000, 'via': 'wifi', 'live': false, 'error': null}), 'Last seen 3 h ago via Wi-Fi');
+    expect(_words({'last_seen': null, 'via': 'wifi', 'error': 'not reachable'}), 'Not reachable · Never connected since linking');
   });
 
   test('Unlink is offered for a device never reached and linked more than 7 days ago', () {
@@ -55,7 +68,8 @@ void main() {
     expect(find.text('Not reachable · Never connected since linking'), findsOneWidget);
     await tester.tap(find.byKey(const ValueKey('peer-p1')));
     await tester.pumpAndSettle();
-    expect(find.text('Not reachable · Never connected since linking'), findsOneWidget);
+    expect(find.text('Not reachable'), findsOneWidget, reason: 'the page says it in two lines: the state, then when');
+    expect(find.text('Never connected since linking'), findsOneWidget);
     expect(find.text("This device hasn't connected since it was linked."), findsOneWidget);
     expect(find.descendant(of: find.byKey(const ValueKey('device-unlink-never')), matching: find.text('Unlink')), findsOneWidget, reason: 'the button says Unlink');
     await tester.ensureVisible(find.byKey(const ValueKey('device-unlink-never')));
@@ -63,14 +77,18 @@ void main() {
     await tester.pumpAndSettle();
     // One question first: Cancel leaves it linked.
     expect(find.text('Unlink Android device?'), findsOneWidget);
-    expect(find.text('It can no longer connect to this device. Files already here stay.'), findsNWidgets(2), reason: 'in the question and under the Unlink row');
+    expect(find.text('It can no longer connect to this device. Files already here stay.'), findsOneWidget, reason: 'in the question; the Unlink button has no line under it');
     await tester.tap(find.text('Cancel'));
     await tester.pumpAndSettle();
     expect(sync.argsOf['unlink'], isNull, reason: 'Cancel does nothing');
     await tester.tap(find.byKey(const ValueKey('device-unlink-never')));
     await tester.pumpAndSettle();
     await tester.tap(find.byKey(const ValueKey('confirm-unlink')));
-    await tester.runAsync(() => Future<void>.delayed(const Duration(milliseconds: 20)));
+    await tester.runAsync(() async {
+      for (var i = 0; i < 200 && !(sync.argsOf['unlink'] != null); i++) {
+        await Future<void>.delayed(const Duration(milliseconds: 10));
+      }
+    });
     await tester.pumpAndSettle();
     expect(sync.argsOf['unlink']!.last, {'peer': 'p1'}, reason: 'the same call the Unlink row makes');
     expect(sync.peers, isEmpty);
@@ -97,7 +115,8 @@ void main() {
     expect(find.text('Connected through a relay · Last seen 5 min ago'), findsOneWidget);
     await tester.tap(find.byKey(const ValueKey('peer-p1')));
     await tester.pumpAndSettle();
-    expect(find.text('Connected through a relay · Last seen 5 min ago'), findsOneWidget);
+    expect(find.text('Connected through a relay'), findsOneWidget);
+    expect(find.text('Last seen 5 min ago'), findsNothing, reason: 'connected: the page does not say when it was last seen');
     expect(find.byKey(const ValueKey('device-unlink-never')), findsNothing);
     s.dispose();
     await tester.pumpWidget(const SizedBox());

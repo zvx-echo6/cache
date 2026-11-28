@@ -87,6 +87,10 @@ sha2 = "0.10"
 [target.'cfg(unix)'.dependencies]
 libc = "0.2"
 
+[target.'cfg(target_os = "android")'.dependencies]
+# The BLE adapter calls the same core directly from its bounded worker threads, not through Flutter's UI isolate.
+jni = "=0.21.1"
+
 [target.'cfg(windows)'.dependencies]
 windows-sys = { version = "0.61", features = ["Win32_Storage_FileSystem"] }
 

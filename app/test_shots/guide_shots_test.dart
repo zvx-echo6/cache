@@ -110,6 +110,7 @@ import 'package:cache/screens/settings/sharing_page.dart';
 import 'package:cache/screens/settings/source_page.dart';
 import 'package:cache/screens/settings/storage_page.dart';
 import 'package:cache/screens/settings/weather_page.dart';
+import 'package:cache/screens/settings/ways_to_connect_page.dart';
 import 'package:cache/screens/settings_screen.dart';
 import 'package:cache/weather/curated.dart';
 import 'package:cache/app_state.dart' show ModelEntry;
@@ -384,6 +385,32 @@ void main() {
     await tester.runAsync(() => sharing.setShared(sharing.kinds[2], true));
     await settle(tester);
     await shot(tester, 'settings-sharing');
+    await tester.pumpWidget(const SizedBox());
+    sharing.dispose();
+    await r.dispose(tester);
+  });
+
+  testWidgets('settings-ways-to-connect', (tester) async {
+    final r = await _rig(tester);
+    // Example entry points only: one private and connected, one not answering, one private and switched off.
+    r.sync
+      ..addEntry('a', 'rt.example.net', 4242, private: true, network: 'example-net', pass: true)
+      ..addEntry('b', 'reticulum.example.org', 4965, status: 'not_answering')
+      ..addEntry('c', 'lab.example.net', 4242, private: true, network: 'lab', pass: true, on: false);
+    final sharing = SharingState(
+      policy: r.policy,
+      supportDir: () async => r.dir,
+      kinds: const [],
+      deviceName: 'Android device',
+      phone: true,
+      reticulum: true,
+      opener: (_) async => r.sync,
+    );
+    await show(tester, WaysToConnectPage(sharing: sharing));
+    await tester.runAsync(() => sharing.setUp());
+    await tester.runAsync(sharing.refresh);
+    await settle(tester);
+    await shot(tester, 'settings-ways-to-connect');
     await tester.pumpWidget(const SizedBox());
     sharing.dispose();
     await r.dispose(tester);

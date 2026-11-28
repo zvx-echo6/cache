@@ -16,6 +16,7 @@ import 'package:flutter_test/flutter_test.dart';
 
 import 'browse/fakes.dart' show testPolicy;
 import 'support/sharing_host_fake.dart';
+import 'support/sync_fake.dart' show linkCodeLines;
 
 /// What a browser knows of the kinds: the phone's own list, whose folders are not the browser's (every folder is null).
 List<DataKind> _kinds() => [
@@ -189,7 +190,7 @@ void main() {
     host.sync.peers.add({'id': 'p1', 'name': 'Desk', 'linked': 1, 'last_seen': 1, 'via': 'direct', 'error': null});
     final s = _web(host, dir);
     await s.init();
-    expect(await s.linkCode(), 'CACHE1-TESTCODE');
+    expect(await s.linkCode(), 'CACHE-7KQF-M2XD-P4WN-R7TA-H3JC-V6YB-Q5LE-W2FS-ZQ');
     await s.rename('Basement');
     expect(s.name, 'Basement');
     await s.renamePeer('p1', 'Office');
@@ -298,10 +299,10 @@ void main() {
 
     // The code and its QR.
     await _tap(tester, find.byKey(const ValueKey('show-code')));
-    expect(find.text('Link code for Cache Server'), findsOneWidget);
-    expect(find.text('CACHE1-TESTCODE'), findsOneWidget);
+    expect(find.text('Show my link code'), findsOneWidget, reason: 'its own page now, with a back arrow');
+    expect(linkCodeLines(tester).join(), 'CACHE-7KQF-M2XD-P4WN-R7TA-H3JC-V6YB-Q5LE-W2FS-ZQ');
     expect(find.text('Copy code'), findsOneWidget);
-    await tester.tapAt(const Offset(5, 5));
+    await tester.pageBack();
     await _settle(tester);
     expect(find.text('Copy code'), findsNothing);
 
@@ -332,7 +333,14 @@ void main() {
     expect(host.sync.argsOf['sync_now']!.last, {'peer': 'peer1'});
     await _tap(tester, find.byKey(const ValueKey('device-unlink')));
     expect(find.text('Unlink Desk?'), findsOneWidget);
-    await _tap(tester, find.byKey(const ValueKey('confirm-unlink')));
+    await tester.tap(find.byKey(const ValueKey('confirm-unlink')));
+    // The screen-lock question goes through a platform channel (none answers here), which takes a real moment.
+    await tester.runAsync(() async {
+      for (var i = 0; i < 200 && !(host.sync.argsOf['unlink'] != null); i++) {
+        await Future<void>.delayed(const Duration(milliseconds: 10));
+      }
+    });
+    await _settle(tester);
     expect(host.sync.argsOf['unlink']!.single, {'peer': 'peer1'});
     expect(s.peers, isEmpty);
 

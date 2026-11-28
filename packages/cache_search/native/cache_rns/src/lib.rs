@@ -2,11 +2,13 @@
 //!
 //! - **Identity.** A device's Reticulum identity is derived from its iroh secret key, so there is nothing new to keep or back
 //!   up, and reinstalling with the same key gives the same Reticulum address.
-//! - **Vouching.** A device announces its destination with a signature by its iroh key over that destination. Only a device
-//!   that already holds the key in its link list can check it, so the announce tells no one else which Cache device it is.
+//! - **Empty announces.** A device's announce carries no app data: no name and no signature (owner, 2026-11-22). Each linked
+//!   device is stored with its Reticulum destination; hearing an announce only marks that destination reachable, and on what.
+//! - **The hello.** The device key's signature moved from the announce into the first message inside a link: right after it
+//!   identifies, the opener sends `/cache/hello` with its device key and a signature over its Reticulum identity. Nothing
+//!   else is answered on a link until a hello from a linked device has checked out.
 //! - **Requests.** Cache's requests (pairing, the index, secrets) are Reticulum link requests on paths the caller names.
-//!   A request is answered only for a requester that identified itself on the link with the identity of a linked device,
-//!   except on the paths the caller marks as open (pairing).
+//!   A request is answered only on a hello-verified link, except on the paths the caller marks as open (pairing).
 //! - **Notify.** "Something changed" goes over the link's Channel, which is acknowledged and ordered. Raw link packets are
 //!   never used: they are not proven by the side that opened a link and are not retried (trial R1).
 
@@ -18,19 +20,32 @@ use std::time::Duration;
 
 use anyhow::{anyhow, bail, Context, Result};
 use iroh::{PublicKey, SecretKey, Signature};
+use personal_rns::engine::LinkClosedReason;
+use personal_rns::interfaces::{ConnectionState, IfacContext, IfacSize, InterfaceId};
 use personal_rns::identity::IdentityHash;
 use personal_rns::prelude::*;
-use personal_rns::routing::announce::emit::AnnounceAppDataBytes;
+/// The wiping string an [`EntryPoint`]'s passphrase is held in.
+pub use personal_rns::prelude::Zeroizing;
+use personal_rns::wifi_auto::AutoWifiStatus;
 use personal_rns::routing::links::channel::MessageType;
 use personal_rns::routing::links::LinkId;
 use personal_rns::routing::request_handlers::{RequestPathHash, RequestPolicy};
 use tokio::sync::mpsc;
 
+pub use personal_rns::prelude::DestinationHash;
+
 pub mod blobs;
+#[cfg(feature = "bluetooth")]
+pub mod bluetooth;
 #[cfg(feature = "rnode")]
 pub mod rnode;
 #[cfg(feature = "rnode")]
 pub mod standin;
+pub mod pair_core;
+pub mod speed;
+pub mod nearby;
+pub use nearby::{NearbyDevice, PairSelf, PairStatus};
+pub use speed::{Speed, Speeds};
 
 /// Cache's Reticulum destination name: `cache.sync.v1`.
 pub const APP_NAME: &str = "cache";
@@ -40,8 +55,34 @@ pub const NOTIFY_TYPE: MessageType = MessageType(0x0C01);
 
 const IDENTITY_CONTEXT: &str =
     "cache_rns 2026-11-14 reticulum identity from the iroh device key v1";
-const VOUCH_PREFIX: &[u8] = b"cache_rns vouch v1";
+const VOUCH_PREFIX: &[u8] = b"cache_rns vouch v2: hello on a link, signed over the Reticulum identity";
+/// The always-open path for the first message on a link ([`hello`]).
+pub const HELLO_PATH: &str = "/cache/hello";
+
+/// What a device answers to the hello of a device it used to be linked with and is not linked with now.
+pub const NOT_LINKED: &[u8] = b"not linked";
+
+/// The text of the error a request fails with when the hello was answered [`NOT_LINKED`]: the caller looks for it
+/// (see [`is_not_linked`]).
+const NOT_LINKED_ERROR: &str = "the other device says this device is not linked";
+
+/// Whether `e` is the failure of a hello the other device answered "not linked".
+pub fn is_not_linked(e: &anyhow::Error) -> bool {
+    e.chain().any(|c| c.to_string() == NOT_LINKED_ERROR)
+}
 const ANNOUNCE_EVERY: Duration = Duration::from_secs(30);
+const PATH_EVERY: Duration = Duration::from_secs(5);
+/// While connected, an entry point is announced on once every this long (and once when it connects), so a path survives an rnsd restart.
+pub const ENTRY_ANNOUNCE_EVERY: Duration = Duration::from_secs(6 * 60 * 60);
+/// An entry point that is not connected for this long is [`EntryState::NotAnswering`].
+pub const NOT_ANSWERING_AFTER: Duration = Duration::from_secs(20);
+/// At least this long between two re-announces made because an interface dropped (node-wide), so a flapping interface cannot spam
+/// anyone's rnsd.
+pub const DROP_REANNOUNCE_GAP: Duration = Duration::from_secs(30);
+/// How often entry points are looked at.
+const ENTRY_POLL: Duration = Duration::from_secs(1);
+/// A linked device whose announce is heard again after this long without one (three of its announces missed) is reachable again.
+pub const REACHABLE_GAP: Duration = Duration::from_secs(95);
 
 /// The 64-byte Reticulum identity secret (X25519 then Ed25519, RNS's layout) for a device's iroh key.
 pub fn identity_secret_for(device: &SecretKey) -> [u8; 64] {
@@ -53,24 +94,167 @@ pub fn identity_secret_for(device: &SecretKey) -> [u8; 64] {
     out
 }
 
-fn vouch_message(destination: &DestinationHash) -> Vec<u8> {
+fn vouch_message(identity: &IdentityHash) -> Vec<u8> {
     let mut m = VOUCH_PREFIX.to_vec();
+    m.extend_from_slice(identity.as_bytes());
+    m
+}
+
+/// The device key's signature over the Reticulum identity a link proved (the hello's proof).
+pub fn vouch(device: &SecretKey, identity: &IdentityHash) -> [u8; 64] {
+    device.sign(&vouch_message(identity)).to_bytes()
+}
+
+/// Whether `sig` is `peer`'s vouch for `identity`.
+pub fn check_vouch(peer: &PublicKey, identity: &IdentityHash, sig: &[u8]) -> bool {
+    let Ok(bytes) = <[u8; 64]>::try_from(sig) else {
+        return false;
+    };
+    peer.verify(&vouch_message(identity), &Signature::from_bytes(&bytes))
+        .is_ok()
+}
+
+const DEST_VOUCH_PREFIX: &[u8] = b"cache_rns vouch v2: link, signed over the Reticulum destination";
+
+fn dest_vouch_message(destination: &DestinationHash) -> Vec<u8> {
+    let mut m = DEST_VOUCH_PREFIX.to_vec();
     m.extend_from_slice(destination.as_bytes());
     m
 }
 
-/// The announce data: the device key's signature over this destination.
-pub fn vouch(device: &SecretKey, destination: &DestinationHash) -> [u8; 64] {
-    device.sign(&vouch_message(destination)).to_bytes()
+/// The device key's signature over its Reticulum destination: what a link code, a pairing and an index carry, so a device
+/// that knows only the destination (not the secret behind it) can check that the destination is the device's own. A
+/// destination is a hash of the identity, so this binds the device key to the identity the same way [`vouch`] does.
+pub fn vouch_destination(device: &SecretKey, destination: &DestinationHash) -> [u8; 64] {
+    device.sign(&dest_vouch_message(destination)).to_bytes()
 }
 
-/// Whether `app_data` is `peer`'s vouch for `destination`.
-pub fn check_vouch(peer: &PublicKey, destination: &DestinationHash, app_data: &[u8]) -> bool {
-    let Ok(bytes) = <[u8; 64]>::try_from(app_data) else {
+/// Whether `sig` is `peer`'s vouch for `destination` ([`vouch_destination`]).
+pub fn check_vouch_destination(peer: &PublicKey, destination: &DestinationHash, sig: &[u8]) -> bool {
+    let Ok(bytes) = <[u8; 64]>::try_from(sig) else {
         return false;
     };
-    peer.verify(&vouch_message(destination), &Signature::from_bytes(&bytes))
+    peer.verify(&dest_vouch_message(destination), &Signature::from_bytes(&bytes))
         .is_ok()
+}
+
+/// A destination as 32 lowercase hex characters (what sync.json and link codes hold).
+pub fn dest_hex(d: &DestinationHash) -> String {
+    d.as_bytes().iter().map(|b| format!("{b:02x}")).collect()
+}
+
+/// The destination of 32 hex characters (either case), if it is one.
+pub fn dest_from_hex(s: &str) -> Option<DestinationHash> {
+    if s.len() != 32 || !s.is_ascii() {
+        return None;
+    }
+    let mut out = [0u8; 16];
+    for (i, b) in out.iter_mut().enumerate() {
+        *b = u8::from_str_radix(&s[2 * i..2 * i + 2], 16).ok()?;
+    }
+    Some(DestinationHash::new(out))
+}
+
+/// The hello body: the device's public key then its vouch (32 + 64 bytes).
+fn hello_body(device: &SecretKey, identity: &IdentityHash) -> Vec<u8> {
+    let mut b = device.public().as_bytes().to_vec();
+    b.extend_from_slice(&vouch(device, identity));
+    b
+}
+
+fn parse_hello(body: &[u8]) -> Option<(PublicKey, [u8; 64])> {
+    if body.len() != 96 {
+        return None;
+    }
+    let key = PublicKey::from_bytes(<&[u8; 32]>::try_from(&body[..32]).ok()?).ok()?;
+    let sig = <[u8; 64]>::try_from(&body[32..]).ok()?;
+    Some((key, sig))
+}
+
+/// The Reticulum identity hash of a device (derived from its iroh key).
+pub fn identity_hash_for(device: &SecretKey) -> IdentityHash {
+    personal_rns::identity::PrivateIdentityMaterial::from_bytes(identity_secret_for(device))
+        .identity_hash()
+}
+
+/// The Reticulum destination of a device (what its linked devices store, and what a link code carries).
+pub fn destination_for(device: &SecretKey) -> Result<DestinationHash> {
+    let d = PreConfiguredDestination::Single {
+        resource_strategy: ResourceStrategy::AcceptNone,
+        maximum_request_bytes: Default::default(),
+        app_name: APP_NAME,
+        aspects: ASPECTS,
+        identity: Zeroizing::new(identity_secret_for(device)),
+        announce_app_data: b"",
+        proof: ProofStrategy::ProveAll,
+        link_requests: LinkRequestPolicy::AcceptAll,
+        ratchet: RatchetPolicy::NoRatchets,
+        request_endpoints: ServeMyRequestEndpoints::No,
+    };
+    d.destination_hash()
+        .map_err(|e| anyhow!("bad destination name: {e:?}"))
+}
+
+/// How a heard announce reached us.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Via {
+    /// Over Wi-Fi/LAN discovery (auto Wi-Fi, or one of its peers).
+    Wifi,
+    /// A directly attached Bluetooth peer, not an internet entry point or a Wi-Fi interface.
+    Bluetooth,
+    /// Through the entry point (an rnsd the person entered) with this id ([`EntryPoint::id`]).
+    Entry(String),
+    /// Over anything else (TCP, hubs, radio).
+    Other,
+}
+
+/// An entry point: an rnsd the person entered (an address and port, and for a private one its IFAC network name and passphrase).
+/// Cache connects to it as a TCP client, never relays for others (transport stays off), and announces on it only when it connects.
+#[derive(Clone)]
+pub struct EntryPoint {
+    /// The entry's own id (16 random bytes in hex, made by whoever stores the list); the key every change is matched by.
+    pub id: String,
+    pub host: String,
+    pub port: u16,
+    /// The IFAC network name. `None` or empty is no name.
+    pub network_name: Option<String>,
+    /// The IFAC passphrase. `None` or empty is no passphrase. Wiped when dropped.
+    pub passphrase: Option<Zeroizing<String>>,
+    /// Switched on. Off keeps the settings but is not connected.
+    pub on: bool,
+}
+
+impl std::fmt::Debug for EntryPoint {
+    // Never the passphrase (this is what a log line or a failed assert would print).
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("EntryPoint")
+            .field("id", &self.id)
+            .field("host", &self.host)
+            .field("port", &self.port)
+            .field("network_name", &self.network_name)
+            .field("has_passphrase", &self.passphrase.as_ref().is_some_and(|p| !p.is_empty()))
+            .field("on", &self.on)
+            .finish()
+    }
+}
+
+/// Where an entry point stands ([`RnsNode::entry_status`]).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum EntryState {
+    /// Switched off (the settings are kept).
+    Off,
+    /// Not connected yet, or lost for less than [`NOT_ANSWERING_AFTER`].
+    Connecting,
+    /// Connected and at least one valid frame has arrived on it.
+    Connected,
+    /// Reconnecting, failed or disconnected for more than [`NOT_ANSWERING_AFTER`].
+    NotAnswering,
+    // There is no "network name or passphrase doesn't match" state. It returns only with an upstream Prns counter of inbound IFAC
+    // failures per interface (the plan, decision 2, option A). Inferring it from bytes with no valid frame fired for the right
+    // passphrase on a quiet rnsd (it echoes a frame back), so it was dropped (2026-11-25).
+    /// Connected, but no valid frame has arrived yet: a quiet rnsd, or one that answers a wrong passphrase with silence or noise.
+    /// Cache cannot tell which.
+    NothingHeard,
 }
 
 /// One network attachment.
@@ -80,9 +264,26 @@ pub enum Iface {
     TcpListen(String),
     /// Connect to a TCP listener at this address.
     TcpConnect(String),
+    /// Wi-Fi/LAN auto-discovery (Prns's `AutoWifi`): finds other devices on the local network with no address typed.
+    /// Which discovery group it uses is [`Config::wifi_group`].
+    WifiAuto,
+    /// An entry point the person entered (an rnsd). Attached at start like any other; the list can change later with
+    /// [`RnsNode::set_entry_points`], which never restarts the node.
+    Entry(EntryPoint),
     #[cfg(feature = "rnode")]
     /// An RNode (LoRa), by a name for the interface, where it is, and its radio settings ([`rnode`]).
     RNode { name: String, port: rnode::RNodePort, radio: rnode::Radio },
+}
+
+impl Iface {
+    /// Whether attaching this carrier requires IP permission. A remote TCP radio still uses IP, unlike direct serial/BLE.
+    pub fn uses_ip(&self) -> bool {
+        match self {
+            Self::TcpListen(_) | Self::TcpConnect(_) | Self::WifiAuto | Self::Entry(_) => true,
+            #[cfg(feature = "rnode")]
+            Self::RNode { port, .. } => matches!(port, rnode::RNodePort::Tcp(_)),
+        }
+    }
 }
 
 /// Who is asking.
@@ -94,19 +295,79 @@ pub enum Asker {
     Unlinked,
 }
 
+/// What taught the node a route that moved ([`Handler::route_moved`]). Prns's announce event does not say whether an announce
+/// answered a path request (`is_path_response` is not on it), so a route heard in an announce is always `Announce`; `PathResponse`
+/// is a route read from the routing table after Cache's own path request.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum RouteFrom {
+    Announce,
+    PathResponse,
+}
+
+impl RouteFrom {
+    pub fn text(self) -> &'static str {
+        match self {
+            RouteFrom::Announce => "an announce",
+            RouteFrom::PathResponse => "a path response",
+        }
+    }
+}
+
 pub type BoxFut<T> = Pin<Box<dyn Future<Output = T> + Send>>;
 
 /// The caller's side: answers requests and takes notifications.
 pub trait Handler: Send + Sync + 'static {
     fn request(&self, asker: Asker, path: &str, body: Vec<u8>) -> BoxFut<Result<Vec<u8>>>;
+    /// [`Handler::request`] with the class this end judges the asker's link to be ([`speed`]): what a request on a path may be
+    /// answered with depends on it. The node calls this one; the default ignores the class.
+    fn request_at(&self, asker: Asker, _speed: Speed, path: &str, body: Vec<u8>) -> BoxFut<Result<Vec<u8>>> {
+        self.request(asker, path, body)
+    }
+    /// A window of the blob `hash` is about to be served to `peer` over a link of class `speed` (Medium here: the file's kind may
+    /// not go over it). False answers the window "too slow". Called per request; do not block.
+    fn blob_allowed(&self, _peer: PublicKey, _hash: cache_store::Hash, _speed: Speed) -> bool {
+        true
+    }
+    /// A window of the blob `hash` was refused to `peer` because the file is bigger than the cap of the entry point its route comes
+    /// in through ([`blobs::OVER_CAP`]). Called per refusal; do not block.
+    fn refused_over_cap(&self, _peer: PublicKey, _hash: cache_store::Hash) {}
+    /// Tests only: every window is answered "too slow", whatever the link measures (an answering end that judges a link slow
+    /// that the asking end thinks is fine).
+    #[cfg(feature = "test-hooks")]
+    fn refuse_blobs(&self) -> bool {
+        false
+    }
     fn notify(&self, from: PublicKey, body: Vec<u8>);
+    /// A linked device is reachable again: its announce was heard after a stretch with none (more than [`REACHABLE_GAP`]), after a
+    /// link to it closed or a request to it failed, or for the first time. Called from the node's event task: do not block.
+    fn reachable(&self, _peer: PublicKey) {}
+    /// A link to or from a linked device closed: why (`reason`), how long it had been open, and the round trip time measured
+    /// when it opened (when known). Called from the node's event task: do not block. Prns's event carries nothing more.
+    fn link_closed(&self, _peer: PublicKey, _reason: &str, _open_secs: Option<u64>, _rtt_ms: Option<u64>) {}
+    /// The route to a linked device now goes through a different interface or entry point than before (`now` and `was` read like
+    /// "host:port", "Wi-Fi" or "other"), learned from `from`. Called once per change, never for the first route learned, from the
+    /// node's event task or a path request: do not block.
+    fn route_moved(&self, _peer: PublicKey, _now: &str, _was: &str, _from: RouteFrom) {}
+    /// Whether the file store may be served yet (false while it is being moved to a new format). While false, a window request
+    /// is answered "not ready" (a temporary failure for the asker), never "missing". Called per request; do not block.
+    fn blobs_ready(&self) -> bool {
+        true
+    }
+    /// A linked device asked for a window of a blob: the blob's hash and the byte just past the last one the window covers. Called
+    /// when the request arrives and again when the answer has been made; do not block.
+    fn served(&self, _peer: PublicKey, _hash: cache_store::Hash, _end: u64) {}
+    /// Both people confirmed a Nearby link and the other device's signature over its destination checked out: keep it
+    /// (device key, name, Reticulum destination, and the device key's signature over it).
+    fn pair_linked(&self, _peer: PublicKey, _name: String, _destination: DestinationHash, _sig: Vec<u8>) {}
 }
 
 pub struct Config {
     pub device: SecretKey,
     pub interfaces: Vec<Iface>,
-    /// Linked devices.
-    pub peers: Vec<PublicKey>,
+    /// Linked devices, each with its Reticulum destination when known (given when linking, over iroh or by the link code).
+    pub peers: Vec<(PublicKey, Option<DestinationHash>)>,
+    /// The Wi-Fi auto discovery group: `None` is Prns's default group.
+    pub wifi_group: Option<Vec<u8>>,
     /// Paths this device answers.
     pub paths: Vec<String>,
     /// Of those, the ones an unlinked device may ask (pairing).
@@ -115,25 +376,53 @@ pub struct Config {
     pub max_bytes: u64,
     /// Cache's blob store: when set, linked devices may fetch verified windows of its blobs ([`blobs`]).
     pub blobs: Option<cache_store::Store>,
+    /// For tests only, off in production: pairing announces are only ever sent on, and listed from, local Wi-Fi/LAN
+    /// interfaces; with this on, TCP interfaces count as local so a loopback test can run.
+    pub pair_local_tcp: bool,
 }
 
 #[derive(Default)]
 struct State {
     peers: HashSet<[u8; 32]>,
-    /// Linked device -> its vouched destination.
+    /// Devices that used to be linked and are not now: their signed hello is answered "not linked".
+    former: HashSet<[u8; 32]>,
+    /// Linked device -> its stored destination.
     destination_of: HashMap<[u8; 32], DestinationHash>,
-    /// Reticulum identity -> linked device.
-    device_of_identity: HashMap<[u8; 16], PublicKey>,
+    /// Linked devices whose announce has been heard, and how.
+    heard: HashMap<[u8; 32], Via>,
     /// Link -> the identity the other end proved on it.
     identity_on_link: HashMap<LinkId, IdentityHash>,
+    /// Link -> the linked device whose hello checked out on it, and the identity that hello was for.
+    verified: HashMap<LinkId, ([u8; 32], IdentityHash)>,
     /// Our open link to each device.
     link_to: HashMap<[u8; 32], LinkId>,
+    /// When each linked device's announce was last heard.
+    last_announce: HashMap<[u8; 32], std::time::Instant>,
+    /// Linked devices a link to which closed, or a request to which failed, since their announce was last heard: the next
+    /// announce says they are reachable again ([`Handler::reachable`]).
+    down: HashSet<[u8; 32]>,
+    /// Link -> when it was seen first and the round trip time it opened with (for the line that says why it closed).
+    link_info: HashMap<LinkId, (std::time::Instant, Option<u64>)>,
+    /// The entry points known to the node (on or off), by id.
+    entries: HashMap<String, Slot>,
+    /// The interface of each attached entry point, back to its id.
+    iface_entry: HashMap<InterfaceId, String>,
+    /// The most a file may be to go through each entry point (bytes), by entry id ([`RnsNode::set_entry_caps`]). An entry with no
+    /// number here has no cap.
+    caps: HashMap<String, u64>,
+    /// Where each linked device's route last went through, as the words a log line uses ([`route_label`]); kept when an entry
+    /// is lost or removed, so the move to another one can say what it was.
+    last_route: HashMap<[u8; 32], String>,
+    /// Told when a route moves ([`Handler::route_moved`]).
+    handler: Option<Arc<dyn Handler>>,
 }
 
 enum Ev {
     Announce {
         destination: DestinationHash,
-        app_data: Vec<u8>,
+        via: Via,
+        /// The interface the announce came in on.
+        iface: InterfaceId,
     },
     Identified {
         link: LinkId,
@@ -141,14 +430,29 @@ enum Ev {
     },
     Closed {
         link: LinkId,
+        reason: &'static str,
+    },
+    Established {
+        link: LinkId,
+        rtt_ms: u64,
     },
     Request {
         token: RespondToken,
+        destination: DestinationHash,
         requester: Option<IdentityHash>,
         path: RequestPathHash,
         data: Vec<u8>,
     },
     Notify {
+        link: LinkId,
+        data: Vec<u8>,
+    },
+    PairAnnounce {
+        destination: DestinationHash,
+        via: Via,
+        hops: u8,
+    },
+    Pair {
         link: LinkId,
         data: Vec<u8>,
     },
@@ -158,11 +462,29 @@ pub struct RnsNode {
     handle: PrnsNodeHandle,
     me: DestinationHash,
     my_identity: IdentityHash,
-    app_data: AnnounceAppDataBytes,
+    device: SecretKey,
+    /// Wi-Fi auto discovery's handle, when attached.
+    wifi: Option<AutoWifiStatus>,
+    /// Nearby linking.
+    nearby: Arc<nearby::Nearby>,
+    /// The linked devices' stored destinations, as Nearby needs them (their announces are not pairing announces).
+    peers_dest: Arc<Mutex<Vec<DestinationHash>>>,
     /// The node's RNode interfaces (slow carriers), as Prns numbered them.
     #[cfg(feature = "rnode")]
     rnode_ifaces: Arc<Mutex<Vec<personal_rns::interfaces::InterfaceId>>>,
     state: Arc<Mutex<State>>,
+    /// Random per node: keys the fingerprint of an entry point's settings, so a changed passphrase is noticed without keeping it.
+    entry_salt: [u8; 32],
+    speeds: Arc<Speeds>,
+    /// How long without an announce makes a linked device reachable again, in ms ([`REACHABLE_GAP`] unless a test changed it).
+    reach_gap_ms: Arc<std::sync::atomic::AtomicU64>,
+    /// How often the periodic path request loop asks (ms); tests lengthen it ([`RnsNode::set_path_every`]).
+    path_every_ms: Arc<std::sync::atomic::AtomicU64>,
+    /// What the node's interfaces looked like when [`RnsNode::interface_gen`] last looked, and how many changes it has seen.
+    iface_sig: Mutex<Option<u64>>,
+    /// Per linked device: held while a link to it is being made ([`RnsNode::link_to`]).
+    link_gates: Mutex<HashMap<[u8; 32], Arc<tokio::sync::Mutex<()>>>>,
+    iface_gen: std::sync::atomic::AtomicU64,
     tasks: Vec<tokio::task::JoinHandle<()>>,
     stop: Mutex<Option<tokio::sync::oneshot::Sender<()>>>,
 }
@@ -190,7 +512,31 @@ impl RnsNode {
         let me = destination
             .destination_hash()
             .map_err(|e| anyhow!("bad destination name: {e:?}"))?;
+        // The pairing pool (Nearby linking): random identities, never derived from the device key, each a destination
+        // `cache.pair.v1` with empty announce data. Prns registers destinations only at start, so they are made here.
+        let mut destinations = vec![destination];
+        let mut pool: Vec<DestinationHash> = Vec::new();
+        for _ in 0..nearby::POOL_SIZE {
+            let mut secret = [0u8; 64];
+            rand::Rng::fill_bytes(&mut rand::rng(), &mut secret);
+            let d = PreConfiguredDestination::Single {
+                resource_strategy: ResourceStrategy::AcceptNone,
+                maximum_request_bytes: Default::default(),
+                app_name: APP_NAME,
+                aspects: nearby::PAIR_ASPECTS,
+                identity: Zeroizing::new(secret),
+                announce_app_data: b"",
+                proof: ProofStrategy::ProveAll,
+                link_requests: LinkRequestPolicy::AcceptAll,
+                ratchet: RatchetPolicy::NoRatchets,
+                request_endpoints: ServeMyRequestEndpoints::No,
+            };
+            zeroize::Zeroize::zeroize(&mut secret);
+            pool.push(d.destination_hash().map_err(|e| anyhow!("bad pairing destination name: {e:?}"))?);
+            destinations.push(d);
+        }
         let (tx, mut rx) = mpsc::unbounded_channel::<Ev>();
+        let observer_tx = tx.clone();
         let clients: Vec<String> = cfg
             .interfaces
             .iter()
@@ -223,6 +569,17 @@ impl RnsNode {
         let rnode_ids: Arc<Mutex<Vec<personal_rns::interfaces::InterfaceId>>> = Arc::default();
         #[cfg(feature = "rnode")]
         let rnode_ids_thread = rnode_ids.clone();
+        let wifi_auto = cfg
+            .interfaces
+            .iter()
+            .any(|i| matches!(i, Iface::WifiAuto))
+            .then(AutoWifi::new);
+        let wifi_status = wifi_auto.as_ref().map(|w| w.status());
+        if let (Some(status), Some(group)) = (&wifi_status, &cfg.wifi_group) {
+            if !status.set_group_id(group) {
+                bail!("the Wi-Fi discovery group is not valid");
+            }
+        }
         let listens: Vec<String> = cfg
             .interfaces
             .iter()
@@ -259,19 +616,26 @@ impl RnsNode {
                     let node = PrnsNode::new(PrnsNodeRecipe {
                         transport_identity: None,
                         remote_control: RemoteControlService::Unavailable.into(),
-                        pre_configured_destinations: [destination],
+                        pre_configured_destinations: destinations,
                         app_state: personal_rns::runtime::NoRemoteControlHostControls,
                         storage: GrowableHeap,
                         request_endpoints: request_endpoints![],
                         on_event: move |event, _state| {
+                            #[cfg(feature = "test-hooks")]
+                            diag_push(format!("event {event:?}"));
                             let ev = match event {
                                 PrnsEvent::Diagnostic(Diagnostic::AnnounceHeard {
                                     destination,
-                                    app_data,
+                                    source_interface,
                                     ..
                                 }) => Ev::Announce {
                                     destination,
-                                    app_data: app_data.to_vec(),
+                                    iface: source_interface,
+                                    via: match source_interface.kind() {
+                                        Some(InterfaceKind::AutoWifi | InterfaceKind::WifiPeer) => Via::Wifi,
+                                        Some(InterfaceKind::BluetoothAuto | InterfaceKind::BluetoothPeer) => Via::Bluetooth,
+                                        _ => Via::Other,
+                                    },
                                 },
                                 PrnsEvent::Diagnostic(Diagnostic::PeerIdentified {
                                     link_id,
@@ -280,10 +644,21 @@ impl RnsNode {
                                     link: link_id,
                                     identity,
                                 },
-                                PrnsEvent::Diagnostic(Diagnostic::LinkClosed {
-                                    link_id, ..
-                                }) => Ev::Closed { link: link_id },
+                                PrnsEvent::Diagnostic(Diagnostic::LinkClosed { link_id, reason }) => Ev::Closed {
+                                    link: link_id,
+                                    reason: match reason {
+                                        LinkClosedReason::Timeout => "timeout (nothing heard on it for too long)",
+                                        LinkClosedReason::PeerClosed => "closed by the other device",
+                                        LinkClosedReason::LocallyClosed => "closed on this device",
+                                        _ => "closed (bad round trip message)",
+                                    },
+                                },
+                                PrnsEvent::Diagnostic(Diagnostic::LinkEstablished(e)) => Ev::Established {
+                                    link: e.link_id,
+                                    rtt_ms: e.rtt_millis,
+                                },
                                 PrnsEvent::Message(Message::Request {
+                                    destination: request_destination,
                                     link_id,
                                     request_id,
                                     requester,
@@ -292,6 +667,7 @@ impl RnsNode {
                                     data,
                                     ..
                                 }) => Ev::Request {
+                                    destination: request_destination,
                                     token: RespondToken {
                                         link_id,
                                         request_id,
@@ -309,6 +685,14 @@ impl RnsNode {
                                     link: link_id,
                                     data: data.to_vec(),
                                 },
+                                PrnsEvent::Message(Message::ChannelMessage {
+                                    link_id,
+                                    message_type,
+                                    data,
+                                }) if message_type == nearby::PAIR_TYPE => Ev::Pair {
+                                    link: link_id,
+                                    data: data.to_vec(),
+                                },
                                 _ => return,
                             };
                             let _ = tx.send(ev);
@@ -317,8 +701,34 @@ impl RnsNode {
                             for a in &clients {
                                 node.attach(TcpClientInterface::new(a.clone()));
                             }
+                            if let Some(w) = wifi_auto {
+                                node.attach(w);
+                            }
                         },
                         persistence: NoPersistence,
+                    })
+                    // A validated announce, with the identity it was made by: a `cache.pair.v1` destination is recognised
+                    // by recomputing its hash from that identity, so nothing is contacted until it matches.
+                    .with_accepted_announce_observer(move |obs| {
+                        #[cfg(feature = "test-hooks")]
+                        diag_push(format!("accepted announce {:?} hops {} from {:?}", obs.destination, obs.hops.0, obs.source_interface));
+                        let is_pair = personal_rns::routing::announce::derive_single_destination_hash(
+                            &obs.announced_identity,
+                            APP_NAME,
+                            nearby::PAIR_ASPECTS,
+                        )
+                        .is_ok_and(|d| d == obs.destination);
+                        if is_pair {
+                            let _ = observer_tx.send(Ev::PairAnnounce {
+                                destination: obs.destination,
+                                via: match obs.source_interface.kind() {
+                                    Some(InterfaceKind::AutoWifi | InterfaceKind::WifiPeer) => Via::Wifi,
+                                    Some(InterfaceKind::BluetoothAuto | InterfaceKind::BluetoothPeer) => Via::Bluetooth,
+                                    _ => Via::Other,
+                                },
+                                hops: obs.hops.0,
+                            });
+                        }
                     });
                     let handle = node.handle();
                     let mut guards = Vec::new();
@@ -369,12 +779,13 @@ impl RnsNode {
         let open: HashSet<String> = cfg.open_paths.iter().cloned().collect();
         let mut paths: Vec<(RequestPathHash, String)> = Vec::new();
         let mut all_paths = cfg.paths.clone();
+        all_paths.push(HELLO_PATH.to_string());
         if cfg.blobs.is_some() {
             all_paths.push(blobs::BLOB_PATH.to_string());
         }
         let store = cfg.blobs.clone();
         for p in &all_paths {
-            let policy = if open.contains(p) {
+            let policy = if open.contains(p) || p == HELLO_PATH {
                 RequestPolicy::AllowAll
             } else {
                 RequestPolicy::RequireIdentified
@@ -385,44 +796,93 @@ impl RnsNode {
                 .map_err(|e| anyhow!("cannot register {p}: {e:?}"))?;
             paths.push((RequestPathHash::of(p), p.clone()));
         }
-        let my_identity = personal_rns::identity::PrivateIdentityMaterial::from_bytes(
-            identity_secret_for(&cfg.device),
-        )
-        .identity_hash();
+        let my_identity = identity_hash_for(&cfg.device);
+
+        let peers_dest: Arc<Mutex<Vec<DestinationHash>>> =
+            Arc::new(Mutex::new(cfg.peers.iter().filter_map(|(_, d)| *d).collect()));
+        let nearby = nearby::Nearby::new(
+            handle.clone(),
+            cfg.device.clone(),
+            me,
+            handler.clone(),
+            wifi_status.clone(),
+            cfg.pair_local_tcp,
+            pool,
+            peers_dest.clone(),
+        );
+        tasks.push(nearby.start_tick());
 
         let state = Arc::new(Mutex::new(State {
-            peers: cfg.peers.iter().map(|p| *p.as_bytes()).collect(),
+            handler: Some(handler.clone()),
+            peers: cfg.peers.iter().map(|(p, _)| *p.as_bytes()).collect(),
+            destination_of: cfg
+                .peers
+                .iter()
+                .filter_map(|(p, d)| d.map(|d| (*p.as_bytes(), d)))
+                .collect(),
             ..Default::default()
         }));
 
-        // Events: vouched announces, identities on links, requests, notifications.
+        let reach_gap_ms = Arc::new(std::sync::atomic::AtomicU64::new(REACHABLE_GAP.as_millis() as u64));
+        let path_every_ms = Arc::new(std::sync::atomic::AtomicU64::new(PATH_EVERY.as_millis() as u64));
+        let speeds = Speeds::new();
+        // Events: heard announces, identities on links, hellos, requests, notifications.
         {
+            let reach_gap_ms = reach_gap_ms.clone();
             let state = state.clone();
             let handle = handle.clone();
+            let nearby = nearby.clone();
+            let speeds = speeds.clone();
             tasks.push(tokio::spawn(async move {
                 while let Some(ev) = rx.recv().await {
                     match ev {
-                        Ev::Announce {
-                            destination,
-                            app_data,
-                        } => {
+                        Ev::Announce { destination, via, iface } => {
+                            // A frame that passed the interface's IFAC check and parsed as an announce: on an entry point that is
+                            // the proof the network name and passphrase match.
+                            let via = {
+                                let mut s = state.lock().unwrap();
+                                match s.iface_entry.get(&iface).cloned() {
+                                    Some(id) => {
+                                        if let Some(slot) = s.entries.get_mut(&id) {
+                                            slot.t.valid = true;
+                                        }
+                                        Via::Entry(id)
+                                    }
+                                    None => via,
+                                }
+                            };
                             if destination == me {
                                 continue;
                             }
-                            let peers: Vec<[u8; 32]> =
-                                state.lock().unwrap().peers.iter().copied().collect();
-                            let Some(peer) = peers
-                                .iter()
-                                .filter_map(|b| PublicKey::from_bytes(b).ok())
-                                .find(|p| check_vouch(p, &destination, &app_data))
-                            else {
-                                continue;
-                            };
-                            let identity = handle.destination_identity_hash(destination).await;
+                            // An announce proves nothing about who sent it (it is empty): it only says a stored
+                            // destination can be reached, and on what.
                             let mut s = state.lock().unwrap();
-                            s.destination_of.insert(*peer.as_bytes(), destination);
-                            if let Some(id) = identity {
-                                s.device_of_identity.insert(*id.as_bytes(), peer);
+                            let hit = s
+                                .destination_of
+                                .iter()
+                                .find(|(_, d)| **d == destination)
+                                .map(|(k, _)| *k);
+                            let mut again = None;
+                            let mut moved = None;
+                            if let Some(k) = hit {
+                                moved = note_route(&mut s, k, &via);
+                                // A device heard for the first time is not "again": the round every device makes at its start, and the
+                                // notices, cover it (and a round at that instant can ask before the link can be made).
+                                s.heard.insert(k, via);
+                                let now = std::time::Instant::now();
+                                let late = s.last_announce.insert(k, now).is_some_and(|t| now.duration_since(t).as_millis() as u64 > reach_gap_ms.load(std::sync::atomic::Ordering::Relaxed));
+                                let was_down = s.down.remove(&k);
+                                if late || was_down {
+                                    again = Some(k);
+                                }
+                            }
+                            drop(s);
+                            if let Some(((now, was), k)) = moved.zip(hit).and_then(|(m, k)| Some((m, PublicKey::from_bytes(&k).ok()?))) {
+                                // Prns's event does not say whether this announce answered a path request.
+                                handler.route_moved(k, &now, &was, RouteFrom::Announce);
+                            }
+                            if let Some(k) = again.and_then(|k| PublicKey::from_bytes(&k).ok()) {
+                                handler.reachable(k);
                             }
                         }
                         Ev::Identified { link, identity } => {
@@ -432,17 +892,56 @@ impl RnsNode {
                                 .identity_on_link
                                 .insert(link, identity);
                         }
-                        Ev::Closed { link } => {
+                        Ev::PairAnnounce { destination, via, hops } => nearby.on_announce(destination, via, hops),
+                        Ev::Pair { link, data } => nearby.on_message(link, &data),
+                        Ev::Established { link, rtt_ms } => {
                             let mut s = state.lock().unwrap();
+                            s.link_info
+                                .entry(link)
+                                .and_modify(|i| i.1 = Some(rtt_ms))
+                                .or_insert((std::time::Instant::now(), Some(rtt_ms)));
+                            // The opener's RTT packet can arrive after its hello checked out: the round trip time is this
+                            // end's measure of the other device's link either way.
+                            let who = s.verified.get(&link).map(|(d, _)| *d);
+                            drop(s);
+                            if let Some(k) = who.and_then(|d| PublicKey::from_bytes(&d).ok()) {
+                                speeds.set_accepted_rtt(&k, rtt_ms);
+                            }
+                        }
+                        Ev::Closed { link, reason } => {
+                            nearby.on_link_closed(link);
+                            let mut s = state.lock().unwrap();
+                            // Which linked device it was (an unlinked or unknown one is not logged), and how long it was open.
+                            let who = s
+                                .link_to
+                                .iter()
+                                .find(|(_, l)| **l == link)
+                                .map(|(k, _)| *k)
+                                .or_else(|| s.verified.get(&link).map(|(k, _)| *k));
+                            let info = s.link_info.remove(&link);
                             s.identity_on_link.remove(&link);
+                            if let Some((d, _)) = s.verified.remove(&link) {
+                                s.down.insert(d);
+                            }
+                            let gone: Vec<[u8; 32]> = s.link_to.iter().filter(|(_, l)| **l == link).map(|(k, _)| *k).collect();
+                            s.down.extend(gone);
                             s.link_to.retain(|_, l| *l != link);
+                            drop(s);
+                            if let Some(k) = who.and_then(|k| PublicKey::from_bytes(&k).ok()) {
+                                handler.link_closed(k, reason, info.map(|(t, _)| t.elapsed().as_secs()), info.and_then(|(_, r)| r));
+                            }
                         }
                         Ev::Request {
                             token,
+                            destination,
                             requester,
                             path,
                             data,
                         } => {
+                            if nearby.owns(destination) {
+                                nearby.on_request(token, destination, path, data);
+                                continue;
+                            }
                             let Some(name) = paths
                                 .iter()
                                 .find(|(h, _)| *h == path)
@@ -450,17 +949,57 @@ impl RnsNode {
                             else {
                                 continue;
                             };
+                            let identity = {
+                                let s = state.lock().unwrap();
+                                requester.or_else(|| s.identity_on_link.get(&token.link_id).copied())
+                            };
+                            if name == HELLO_PATH {
+                                // The first message on a link: the device key and its signature over the identity the
+                                // link proved. Anything that does not check out gets no answer at all.
+                                // The one exception: a device that used to be linked and whose hello is signed correctly
+                                // is told "not linked" (so it can learn it was unlinked).
+                                let reply = identity.and_then(|id| {
+                                    let (device, sig) = parse_hello(&data)?;
+                                    let mut s = state.lock().unwrap();
+                                    if !check_vouch(&device, &id, &sig) {
+                                        return None;
+                                    }
+                                    if s.peers.contains(device.as_bytes()) {
+                                        s.verified.insert(token.link_id, (*device.as_bytes(), id));
+                                        // The round trip time this link came up with is this end's measure of the device's link.
+                                        if let Some((up, Some(ms))) = s.link_info.get(&token.link_id).copied() {
+                                            speeds.set_accepted_rtt_at(&device, ms, up);
+                                        }
+                                        Some(&b"ok"[..])
+                                    } else if s.former.contains(device.as_bytes()) {
+                                        Some(NOT_LINKED)
+                                    } else {
+                                        None
+                                    }
+                                });
+                                if let Some(reply) = reply {
+                                    let _ = handle.respond_bytes(token, reply);
+                                }
+                                continue;
+                            }
                             let asker = {
                                 let s = state.lock().unwrap();
-                                let id = requester
-                                    .or_else(|| s.identity_on_link.get(&token.link_id).copied());
-                                id.and_then(|i| s.device_of_identity.get(i.as_bytes()).copied())
-                                    .filter(|p| s.peers.contains(p.as_bytes()))
+                                verified_device(&s, &token.link_id, identity)
                                     .map(Asker::Linked)
                                     .unwrap_or(Asker::Unlinked)
                             };
                             if asker == Asker::Unlinked && !open.contains(&name) {
-                                // Not linked, and not an open path: no answer at all, as the iroh gate refuses the connection.
+                                // A device whose hello verified on this link but that has since been unlinked is told
+                                // "not linked" (its link predates the unlink, so no new hello will come).
+                                let former = {
+                                    let s = state.lock().unwrap();
+                                    verified_former_device(&s, &token.link_id, identity)
+                                };
+                                if former {
+                                    let _ = handle.respond_bytes(token, NOT_LINKED);
+                                }
+                                // Otherwise no hello from a linked device, and not an open path: no answer at all, as the
+                                // iroh gate refuses the connection.
                                 continue;
                             }
                             if name == blobs::BLOB_PATH && store.is_some() {
@@ -470,16 +1009,54 @@ impl RnsNode {
                                     continue;
                                 };
                                 let handle = handle.clone();
+                                let (handler, from) = (handler.clone(), match asker {
+                                    Asker::Linked(p) => p,
+                                    Asker::Unlinked => continue,
+                                });
+                                let speed = speeds.serve_speed(&from);
+                                let state = state.clone();
                                 tokio::spawn(async move {
-                                    let reply = blobs::serve_window(&store, &data).await;
+                                    if !handler.blobs_ready() {
+                                        let _ = handle.respond_owned_bytes(token, blobs::not_ready());
+                                        return;
+                                    }
+                                    let want = blobs::decode_want(&data);
+                                    if let Some((hash, start, end)) = want {
+                                        // The class this end judges the link to be decides first, whatever the asker thinks of it.
+                                        #[cfg(feature = "test-hooks")]
+                                        let refused = handler.refuse_blobs();
+                                        #[cfg(not(feature = "test-hooks"))]
+                                        let refused = false;
+                                        let slow_for_this = speed != Speed::Fast
+                                            && (speed.window_chunks().is_none_or(|w| end.saturating_sub(start) > w) || !handler.blob_allowed(from, hash, speed));
+                                        if refused || slow_for_this {
+                                            let _ = handle.respond_owned_bytes(token, vec![blobs::TOO_SLOW]);
+                                            return;
+                                        }
+                                        handler.served(from, hash, end.saturating_mul(blobs::CHUNK));
+                                    }
+                                    // The most this file may be for the route the asker's windows come back by: the entry point it comes in
+                                    // through has a cap, and a bigger file is not served over it, whatever the asker thinks of it.
+                                    let cap = asker_cap(&handle, &state, from).await;
+                                    let reply = blobs::serve_window(&store, &data, speed, cap).await;
+                                    if let (Some((hash, _, _)), true) = (want, reply.first() == Some(&blobs::OVER_CAP)) {
+                                        handler.refused_over_cap(from, hash);
+                                    }
+                                    if let Some((hash, _, end)) = want {
+                                        handler.served(from, hash, end.saturating_mul(blobs::CHUNK));
+                                    }
                                     let _ = handle.respond_owned_bytes(token, reply);
                                 });
                                 continue;
                             }
                             let handler = handler.clone();
                             let handle = handle.clone();
+                            let speed = match asker {
+                                Asker::Linked(p) => speeds.serve_speed(&p),
+                                Asker::Unlinked => Speed::Fast,
+                            };
                             tokio::spawn(async move {
-                                let reply = match handler.request(asker, &name, data).await {
+                                let reply = match handler.request_at(asker, speed, &name, data).await {
                                     Ok(r) => r,
                                     Err(e) => format!("error: {e}").into_bytes(),
                                 };
@@ -489,10 +1066,8 @@ impl RnsNode {
                         Ev::Notify { link, data } => {
                             let from = {
                                 let s = state.lock().unwrap();
-                                s.identity_on_link
-                                    .get(&link)
-                                    .and_then(|i| s.device_of_identity.get(i.as_bytes()).copied())
-                                    .filter(|p| s.peers.contains(p.as_bytes()))
+                                let id = s.identity_on_link.get(&link).copied();
+                                verified_device(&s, &link, id)
                             };
                             if let Some(from) = from {
                                 handler.notify(from, data);
@@ -503,34 +1078,83 @@ impl RnsNode {
             }));
         }
 
-        // Announces: at start, then every 30 s.
+        // Paths: a stored destination with no path yet gets a standard path request (so a routed destination, behind
+        // ordinary transport nodes, is reachable without its announce having reached us directly).
         {
             let handle = handle.clone();
-            let app_data = announce_data(&cfg.device, &me)?;
+            let state = state.clone();
+            let path_every_ms = path_every_ms.clone();
             tasks.push(tokio::spawn(async move {
-                let mut tick = tokio::time::interval(ANNOUNCE_EVERY);
                 loop {
-                    tick.tick().await;
-                    let _ = handle
-                        .announce_now(AnnounceNow {
-                            destination: me,
-                            target: AnnounceTarget::AllInterfaces,
-                            app_data: AnnounceAppData::Data(app_data.clone()),
-                        })
-                        .await;
+                    let missing: Vec<([u8; 32], DestinationHash)> = {
+                        let s = state.lock().unwrap();
+                        s.destination_of
+                            .iter()
+                            .filter(|(k, _)| !s.heard.contains_key(*k))
+                            .map(|(k, d)| (*k, *d))
+                            .collect()
+                    };
+                    for (k, d) in missing {
+                        find_path(&handle, &state, k, d).await;
+                    }
+                    // The wait is read again every 200 ms, so a test that lengthens it takes effect at once.
+                    let from = std::time::Instant::now();
+                    while from.elapsed() < Duration::from_millis(path_every_ms.load(std::sync::atomic::Ordering::Relaxed)) {
+                        tokio::time::sleep(Duration::from_millis(200)).await;
+                    }
                 }
             }));
         }
 
-        let app_data = announce_data(&cfg.device, &me)?;
+        // Announces (empty app data): at start, then every 30 s, on every interface that is not an entry point (Wi-Fi, and
+        // the carriers tests attach). An entry point is announced on once when it connects, then every 6 h ([`entry_monitor`]).
+        {
+            let handle = handle.clone();
+            let state = state.clone();
+            tasks.push(tokio::spawn(async move {
+                let mut tick = tokio::time::interval(ANNOUNCE_EVERY);
+                loop {
+                    tick.tick().await;
+                    announce_off_entries(&handle, &state, me).await;
+                }
+            }));
+        }
+
+        // The entry points given at start; later changes come through `set_entry_points`.
+        let entry_salt: [u8; 32] = rand::random();
+        let first: Vec<EntryPoint> = cfg
+            .interfaces
+            .iter()
+            .filter_map(|i| if let Iface::Entry(e) = i { Some(e.clone()) } else { None })
+            .collect();
+        if !first.is_empty() {
+            apply_entries(&handle, &state, &entry_salt, &first);
+        }
+        // Entry point status, the announce when one connects, and the path requests that follow.
+        {
+            let handle = handle.clone();
+            let state = state.clone();
+            tasks.push(tokio::spawn(entry_monitor(handle, state, me)));
+        }
+
         Ok(RnsNode {
             handle,
             me,
             my_identity,
-            app_data,
+            device: cfg.device.clone(),
+            wifi: wifi_status,
             #[cfg(feature = "rnode")]
             rnode_ifaces: rnode_ids,
+            nearby,
+            peers_dest,
             state,
+            entry_salt,
+            speeds,
+            reach_gap_ms,
+            path_every_ms,
+            iface_sig: Mutex::new(None),
+            link_gates: Mutex::new(HashMap::new()),
+            iface_gen: std::sync::atomic::AtomicU64::new(0),
             tasks,
             stop: Mutex::new(Some(stop_tx)),
         })
@@ -542,43 +1166,162 @@ impl RnsNode {
         self.rnode_ifaces.lock().unwrap().len()
     }
 
+    /// What this node knows of each linked device's link speed ([`speed`]).
+    pub fn speeds(&self) -> Arc<Speeds> {
+        self.speeds.clone()
+    }
+
     pub fn destination(&self) -> DestinationHash {
         self.me
     }
 
-    /// Replaces the list of linked devices.
-    pub fn set_peers(&self, peers: &[PublicKey]) {
+    /// Replaces the list of linked devices (each with its stored destination, when known).
+    pub fn set_peers(&self, peers: &[(PublicKey, Option<DestinationHash>)]) {
         let mut s = self.state.lock().unwrap();
-        s.peers = peers.iter().map(|p| *p.as_bytes()).collect();
+        s.peers = peers.iter().map(|(p, _)| *p.as_bytes()).collect();
         let keep = s.peers.clone();
+        // A destination already stored stays when the caller does not know it (None); a changed one is not heard yet.
+        for (p, d) in peers {
+            if let Some(d) = d {
+                if s.destination_of.insert(*p.as_bytes(), *d) != Some(*d) {
+                    s.heard.remove(p.as_bytes());
+                    s.last_route.remove(p.as_bytes());
+                }
+            }
+        }
         s.destination_of.retain(|k, _| keep.contains(k));
-        s.device_of_identity
-            .retain(|_, p| keep.contains(p.as_bytes()));
+        *self.peers_dest.lock().unwrap() = s.destination_of.values().copied().collect();
+        s.heard.retain(|k, _| keep.contains(k));
+        s.last_route.retain(|k, _| keep.contains(k));
+        // `verified` is kept: `verified_device` checks the peer list, and an unlinked device's open link must still be
+        // recognised (to answer it "not linked") until `set_former` says whether it is remembered.
         s.link_to.retain(|k, _| keep.contains(k));
     }
 
-    /// Whether a vouched announce from `peer` has been heard.
-    pub fn knows(&self, peer: &PublicKey) -> bool {
-        self.state
-            .lock()
-            .unwrap()
-            .destination_of
-            .contains_key(peer.as_bytes())
+    /// Tests only: how long without an announce makes a linked device reachable again.
+    pub fn set_reach_gap(&self, d: Duration) {
+        self.reach_gap_ms.store(d.as_millis() as u64, std::sync::atomic::Ordering::Relaxed);
     }
 
-    /// Announces now (for example after a network change).
+    /// Tests only: how often the periodic path request loop asks for the devices not heard yet (a long time leaves finding a path
+    /// to the requests sent when an entry point connects).
+    pub fn set_path_every(&self, d: Duration) {
+        self.path_every_ms.store(d.as_millis() as u64, std::sync::atomic::Ordering::Relaxed);
+    }
+
+    /// Replaces the list of devices that used to be linked (not linked now): a signed hello from one is answered "not linked".
+    pub fn set_former(&self, former: &[PublicKey]) {
+        let mut s = self.state.lock().unwrap();
+        s.former = former.iter().map(|p| *p.as_bytes()).collect();
+        let (peers, former) = (s.peers.clone(), s.former.clone());
+        s.verified.retain(|_, (d, _)| peers.contains(d) || former.contains(d));
+    }
+
+    /// Whether a path to `peer`'s stored destination is known: its announce was heard (from any number of hops away), or a
+    /// standard path request for it was answered.
+    pub fn reachable(&self, peer: &PublicKey) -> bool {
+        self.state.lock().unwrap().heard.contains_key(peer.as_bytes())
+    }
+
+    /// Sends a standard path request for `peer`'s stored destination now (without waiting for the next periodic one) and says
+    /// whether a path is known after it. False when no destination is stored.
+    pub async fn find_path_to(&self, peer: &PublicKey) -> bool {
+        let destination = self.state.lock().unwrap().destination_of.get(peer.as_bytes()).copied();
+        let Some(destination) = destination else { return false };
+        if self.reachable(peer) {
+            return true;
+        }
+        find_path(&self.handle, &self.state, *peer.as_bytes(), destination).await
+    }
+
+    /// Sends a standard path request for a destination that is not a stored device (the destination a short link code names)
+    /// and says whether a path is known after it: `wait` is how long a routed answer may take.
+    pub async fn find_path_dest(&self, destination: DestinationHash, wait: Duration) -> bool {
+        matches!(tokio::time::timeout(wait, self.handle.request_path(destination)).await, Ok(Ok(_)))
+    }
+
+    /// What `peer`'s route comes in on (its first hop's interface): [`Via::Wifi`] only for Wi-Fi auto interfaces.
+    pub fn via(&self, peer: &PublicKey) -> Option<Via> {
+        self.state.lock().unwrap().heard.get(peer.as_bytes()).cloned()
+    }
+
+    /// What the node's own route to `destination` comes in on, from its routing table (the first hop's interface): the entry point
+    /// it came through, Wi-Fi, or anything else; `None` when the node holds no route. This is what a path found by a path request
+    /// (which brings no announce of its own to hear) is tied to an entry point by.
+    pub async fn route_via(&self, destination: DestinationHash) -> Option<Via> {
+        route_via(&self.handle, &self.state, destination).await
+    }
+
+    /// Announces now (for example after a network change), on every interface but the entry points ([`entry_monitor`] announces
+    /// on those when they connect). The app data is empty.
     pub async fn announce(&self) -> Result<()> {
-        self.handle
-            .announce_now(AnnounceNow {
-                destination: self.me,
-                target: AnnounceTarget::AllInterfaces,
-                app_data: AnnounceAppData::Data(self.app_data.clone()),
-            })
-            .await
-            .map_err(|e| anyhow!("{e:?}"))
+        announce_off_entries(&self.handle, &self.state, self.me).await;
+        Ok(())
     }
 
-    async fn link_to(&self, peer: &PublicKey) -> Result<LinkId> {
+    /// Makes the entry points the ones listed, by id, on the running node (it is never restarted): a new entry that is on, or
+    /// one newly switched on, is attached; one switched off or removed is detached and its routes dropped (`forget_interface`);
+    /// an edited one is detached and attached again. Each is keyed with its IFAC network name and passphrase (either may be
+    /// empty). The passphrase copies made here are wiped once the key is derived, and only a salted hash of the settings is
+    /// kept to notice an edit.
+    pub fn set_entry_points(&self, entries: &[EntryPoint]) {
+        apply_entries(&self.handle, &self.state, &self.entry_salt, entries);
+    }
+
+    /// The most a file may be to go through each entry point (by id, in bytes). A device answering a window for a file bigger than the
+    /// cap of the entry its asker's route comes in through refuses it ([`blobs::OVER_CAP`]). Not a setting of the entry itself, so
+    /// changing one does not reconnect it. The ids not listed have no cap.
+    pub fn set_entry_caps(&self, caps: &[(String, u64)]) {
+        self.state.lock().unwrap().caps = caps.iter().cloned().collect();
+    }
+
+    /// The cap of the entry point `id`, if it has one.
+    pub fn entry_cap(&self, id: &str) -> Option<u64> {
+        self.state.lock().unwrap().caps.get(id).copied()
+    }
+
+    /// Where each entry point stands, by id, with when that was checked (ms since the Unix epoch): sorted by id.
+    pub fn entry_status(&self) -> Vec<(String, EntryState, u64)> {
+        observe_entries(&self.handle, &self.state);
+        let now = std::time::Instant::now();
+        let checked = unix_ms();
+        let s = self.state.lock().unwrap();
+        let mut out: Vec<(String, EntryState, u64)> =
+            s.entries.iter().map(|(id, slot)| (id.clone(), judge(slot, now), checked)).collect();
+        out.sort_by(|a, b| a.0.cmp(&b.0));
+        out
+    }
+
+    /// Wi-Fi auto discovery's current members (interfaces to other devices found on the local network).
+    pub fn wifi_members(&self) -> usize {
+        self.wifi.as_ref().map_or(0, |w| w.members().len())
+    }
+
+    /// The local addresses Wi-Fi auto discovery is using.
+    pub fn wifi_local_addresses(&self) -> Vec<(std::net::IpAddr, u32)> {
+        self.wifi.as_ref().map(|w| w.local_addresses()).unwrap_or_default()
+    }
+
+    /// Turns Wi-Fi auto discovery on or off (when attached).
+    pub fn set_wifi_enabled(&self, on: bool) {
+        if let Some(w) = &self.wifi {
+            if on {
+                w.enable()
+            } else {
+                w.disable()
+            }
+        }
+    }
+
+    /// The link this device has to `peer`, made if there is none. One at a time per device: two requests (a transfer and a
+    /// measurement) that both find no link would each make one, and the second would look like a new link.
+    async fn link_to(&self, peer: &PublicKey, timeout: Duration) -> Result<LinkId> {
+        let gate = self.link_gates.lock().unwrap().entry(*peer.as_bytes()).or_default().clone();
+        let _one_at_a_time = gate.lock().await;
+        self.make_link(peer, timeout).await
+    }
+
+    async fn make_link(&self, peer: &PublicKey, timeout: Duration) -> Result<LinkId> {
         let (existing, destination) = {
             let s = self.state.lock().unwrap();
             if !s.peers.contains(peer.as_bytes()) {
@@ -593,7 +1336,10 @@ impl RnsNode {
             return Ok(l);
         }
         let destination = destination
-            .ok_or_else(|| anyhow!("not reachable over Reticulum (no announce heard)"))?;
+            .ok_or_else(|| anyhow!("no Reticulum destination stored for this device"))?;
+        if !self.reachable(peer) {
+            find_path(&self.handle, &self.state, *peer.as_bytes(), destination).await;
+        }
         let link = self
             .handle
             .establish_link(destination)
@@ -603,16 +1349,152 @@ impl RnsNode {
             .identify(link, self.my_identity)
             .await
             .map_err(|e| anyhow!("could not identify on the link: {e:?}"))?;
-        self.state
-            .lock()
-            .unwrap()
-            .link_to
-            .insert(*peer.as_bytes(), link);
+        let rtt = match self.hello(link, timeout).await {
+            Ok(rtt) => rtt,
+            Err(e) => {
+                let _ = self.handle.close_link(link);
+                return Err(e);
+            }
+        };
+        // The new link's round trip time and the route's first hop set its class before anything has been measured.
+        if let Some(hop) = self.first_hop(destination).await {
+            self.speeds.set_first_hop(peer, Some(hop));
+        }
+        self.speeds.set_opened_rtt(peer, rtt);
+        {
+            let mut s = self.state.lock().unwrap();
+            s.link_to.insert(*peer.as_bytes(), link);
+            // The other end of a link is told its round trip time when it is up; this end only knows when it opened.
+            s.link_info.entry(link).or_insert((std::time::Instant::now(), None));
+        }
         Ok(link)
     }
 
+    /// The nominal bitrate (bits a second) of the interface the route to `destination` leaves by, when Prns knows it.
+    async fn first_hop(&self, destination: DestinationHash) -> Option<u64> {
+        let route = self.handle.route(destination).await?;
+        self.handle.interface_timing_inventory().into_iter().find(|i| i.id == route.interface).map(|i| i.bitrate.get())
+    }
+
+    /// The first message on a link: who we are (device key), signed over the identity the link proved. Its answer carries the
+    /// link's round trip time (ms) as Reticulum measured it.
+    async fn hello(&self, link: LinkId, timeout: Duration) -> Result<u64> {
+        let body = hello_body(&self.device, &self.my_identity);
+        let r = tokio::time::timeout(
+            timeout + Duration::from_secs(1),
+            self.handle.request_with_response_timeout(
+                link,
+                RequestPathHash::of(HELLO_PATH),
+                &body,
+                exact(timeout),
+            ),
+        )
+        .await;
+        match r {
+            Ok(Ok((reply, rtt))) if unpack_bin(reply.clone()).is_ok_and(|b| b == b"ok") => Ok(rtt.millis()),
+            Ok(Ok((reply, _))) if unpack_bin(reply.clone()).is_ok_and(|b| b == NOT_LINKED) => bail!(NOT_LINKED_ERROR),
+            Ok(Ok(_)) => bail!("the other device did not accept the hello"),
+            Ok(Err(e)) => bail!("no answer to the hello: {e:?}"),
+            Err(_) => bail!("the hello timed out"),
+        }
+    }
+
+    /// A link that has gone without a measurement is measured before it is used: the time of a small request (the hello again,
+    /// which every build answers) is its round trip time now. If that puts it in another class than before, the class changes on
+    /// this end and the link stays: it is neither closed nor made again (cache-pm, 2026-11-24), and only what the new class allows
+    /// goes on. Returns the link to use.
+    ///
+    /// How each end learns the new class: the asking end (this one) takes the probe's time as its round trip time. The answering
+    /// end cannot learn it from the link: Prns fixes a link's round trip time when the link comes up (the `rtt` on a request is
+    /// that one, and nothing newer reaches the app). It keeps its own estimate: the round trip time it was given at link-up and
+    /// the first hop, or, when it asks this device too and so probes a link of its own, that newer measurement (the path is the
+    /// same both ways, [`Speeds::serve_speed`]). That
+    /// is enough because the asker never asks for what its own class forbids; the answering end's check is the backstop for an
+    /// asker that does. A link that has got faster is the one case where a stale answering end refuses what the asker may now ask
+    /// for: [`RnsNode::relink`] is for that (the asking end calls it when it is refused as too slow while its own class says the
+    /// file is fine).
+    async fn probe(&self, peer: &PublicKey, link: LinkId, timeout: Duration) -> Result<LinkId> {
+        let sent = std::time::Instant::now();
+        if let Err(e) = self.hello(link, timeout.min(Duration::from_secs(30))).await {
+            self.forget_link(peer);
+            let _ = self.handle.close_link(link);
+            return Err(e);
+        }
+        self.speeds.note_probe(peer, sent.elapsed().as_millis() as u64);
+        Ok(link)
+    }
+
+    /// Measures the link to `peer` now with a small request (making the link first if there is none), whatever the time since the
+    /// last measurement. Whether a new link had to come up since the last call.
+    pub async fn measure(&self, peer: &PublicKey, timeout: Duration) -> Result<bool> {
+        let link = self.link_to(peer, timeout).await?;
+        self.probe(peer, link, timeout).await?;
+        Ok(self.speeds.take_fresh(peer))
+    }
+
+    /// [`RnsNode::relink`] for a link this device ends itself to tell the answering end the current round trip time: the link that
+    /// comes up in its place is not taken as a new link by [`Speeds::take_fresh`] (the path did not change, only the other end's
+    /// number for it).
+    pub fn relink_own(&self, peer: &PublicKey) {
+        self.speeds.note_own_relink(peer);
+        self.relink(peer);
+    }
+
+    /// A number that changes when an interface of this node comes up, goes down or is added or removed since the last call that
+    /// saw it change (the first call sets the baseline). A held back item resumes at once on a change: the path may be faster.
+    pub fn interface_gen(&self) -> u64 {
+        use std::hash::{Hash as _, Hasher};
+        let mut states: Vec<String> = self.handle.interfaces().iter().map(|i| format!("{:?}:{:?}", i.id, i.connection)).collect();
+        states.sort();
+        let mut h = std::collections::hash_map::DefaultHasher::new();
+        states.hash(&mut h);
+        let sig = h.finish();
+        let mut last = self.iface_sig.lock().unwrap();
+        if last.is_some_and(|s| s != sig) {
+            self.iface_gen.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        }
+        *last = Some(sig);
+        self.iface_gen.load(std::sync::atomic::Ordering::Relaxed)
+    }
+
+    /// Closes the link this device has to `peer` and lets the next request make a new one: the other end learns the round trip
+    /// time of the new link when it comes up (the only way an answering end that asks nothing itself can).
+    pub fn relink(&self, peer: &PublicKey) {
+        let link = self.state.lock().unwrap().link_to.remove(peer.as_bytes());
+        if let Some(l) = link {
+            let _ = self.handle.close_link(l);
+        }
+    }
+
+    /// Tests only: attaches one more TCP client interface to the running node (an interface coming up).
+    #[cfg(feature = "test-hooks")]
+    pub fn attach_tcp_client(&self, addr: &str) {
+        self.handle.attach(TcpClientInterface::new(addr.to_string()));
+    }
+
+    /// Tests only: how many hops the node's routing table says `destination` is away (Prns `NodeIntrospection::route`, the
+    /// route's `hops`); `None` when the node holds no route.
+    #[cfg(feature = "test-hooks")]
+    pub async fn test_route_hops(&self, destination: DestinationHash) -> Option<u8> {
+        self.handle.route(destination).await.map(|r| r.hops)
+    }
+
+    /// Tests only: every interface's snapshot (Prns `interfaces()`) as text: connection state, rx and tx bytes, destinations, links.
+    #[cfg(feature = "test-hooks")]
+    pub fn test_interfaces(&self) -> Vec<String> {
+        self.handle.interfaces().iter().map(|x| format!("{x:?}")).collect()
+    }
+
+    /// The link this device has open to `peer` (one it opened), as Prns numbers it: for telling whether a link was kept or made
+    /// again.
+    pub fn link_id_to(&self, peer: &PublicKey) -> Option<impl std::fmt::Debug + PartialEq + Clone> {
+        self.state.lock().unwrap().link_to.get(peer.as_bytes()).copied()
+    }
+
     fn forget_link(&self, peer: &PublicKey) {
-        self.state.lock().unwrap().link_to.remove(peer.as_bytes());
+        let mut s = self.state.lock().unwrap();
+        s.link_to.remove(peer.as_bytes());
+        s.down.insert(*peer.as_bytes());
     }
 
     /// Asks a linked device on `path`.
@@ -623,7 +1505,10 @@ impl RnsNode {
         body: &[u8],
         timeout: Duration,
     ) -> Result<Vec<u8>> {
-        let link = self.link_to(peer).await?;
+        let mut link = self.link_to(peer, timeout).await?;
+        if self.speeds.probe_due(peer) {
+            link = self.probe(peer, link, timeout).await?;
+        }
         let r = tokio::time::timeout(
             timeout + Duration::from_secs(1),
             self.handle.request_with_response_timeout(
@@ -635,7 +1520,13 @@ impl RnsNode {
         )
         .await;
         match r {
-            Ok(Ok((reply, _rtt))) => unpack_bin(reply),
+            Ok(Ok((reply, _rtt))) => {
+                let body = unpack_bin(reply)?;
+                if body == NOT_LINKED {
+                    bail!(NOT_LINKED_ERROR);
+                }
+                Ok(body)
+            }
             Ok(Err(e)) => {
                 self.forget_link(peer);
                 Err(anyhow!("the request failed: {e:?}"))
@@ -664,6 +1555,17 @@ impl RnsNode {
             .identify(link, self.my_identity)
             .await
             .map_err(|e| anyhow!("could not identify: {e:?}"))?;
+        // The hello of a device the other end does not list is not answered, and pairing does not need it: send it and
+        // do not wait.
+        {
+            let handle = self.handle.clone();
+            let body = hello_body(&self.device, &self.my_identity);
+            tokio::spawn(async move {
+                let _ = handle
+                    .request_with_response_timeout(link, RequestPathHash::of(HELLO_PATH), &body, exact(Duration::from_secs(5)))
+                    .await;
+            });
+        }
         let r = tokio::time::timeout(
             timeout + Duration::from_secs(1),
             self.handle.request_with_response_timeout(
@@ -684,7 +1586,7 @@ impl RnsNode {
 
     /// Tells a linked device something changed (acknowledged, in order).
     pub async fn notify(&self, peer: &PublicKey, body: &[u8]) -> Result<()> {
-        let link = self.link_to(peer).await?;
+        let link = self.link_to(peer, Duration::from_secs(10)).await?;
         match self
             .handle
             .send_channel_message(link, NOTIFY_TYPE, body)
@@ -698,6 +1600,41 @@ impl RnsNode {
         }
     }
 
+    /// Nearby linking: the page opened. Takes an unused pairing address and answers for it ([`nearby`]).
+    pub async fn pair_open(&self, me: PairSelf) -> Result<()> {
+        self.nearby.open(me).await
+    }
+
+    /// Nearby linking: the page closed. Stops announcing and answering; nothing in progress is kept.
+    pub async fn pair_close(&self) {
+        self.nearby.close().await
+    }
+
+    /// Nearby linking: the devices heard nearby that gave their name, while our page is open.
+    pub fn pair_list(&self) -> Vec<NearbyDevice> {
+        self.nearby.list()
+    }
+
+    /// Nearby linking: Link was tapped on the device `id` of [`RnsNode::pair_list`].
+    pub async fn pair_link(&self, id: &str, me: PairSelf) -> Result<()> {
+        self.nearby.link(id, me).await
+    }
+
+    /// Nearby linking: where it stands.
+    pub fn pair_status(&self) -> PairStatus {
+        self.nearby.status()
+    }
+
+    /// Nearby linking: Link (`true`) or Cancel on the words.
+    pub async fn pair_answer(&self, ok: bool) -> Result<()> {
+        self.nearby.answer(ok).await
+    }
+
+    /// The Nearby state itself (tests: the pool, the clock, who was heard).
+    pub fn nearby(&self) -> &Arc<nearby::Nearby> {
+        &self.nearby
+    }
+
     /// Stops the node and its thread.
     pub fn stop(&self) {
         for t in &self.tasks {
@@ -709,13 +1646,127 @@ impl RnsNode {
     }
 }
 
-fn announce_data(device: &SecretKey, me: &DestinationHash) -> Result<AnnounceAppDataBytes> {
-    AnnounceAppDataBytes::from_slice(&vouch(device, me))
-        .map_err(|_| anyhow!("the vouch does not fit in an announce"))
+/// Tests only: what the node reports as it happens (every Prns event, every accepted announce), taken by [`test_take_diag`].
+#[cfg(feature = "test-hooks")]
+static DIAG: Mutex<Vec<String>> = Mutex::new(Vec::new());
+
+#[cfg(feature = "test-hooks")]
+fn diag_push(mut line: String) {
+    line.truncate(240);
+    DIAG.lock().unwrap().push(line);
+}
+
+/// Tests only: the lines [`diag_push`] collected since the last call.
+#[cfg(feature = "test-hooks")]
+pub fn test_take_diag() -> Vec<String> {
+    std::mem::take(&mut *DIAG.lock().unwrap())
+}
+
+/// What `destination`'s route in the node's routing table comes in on (its next-hop interface: Prns `NodeIntrospection::route`).
+async fn route_via(handle: &PrnsNodeHandle, state: &Arc<Mutex<State>>, destination: DestinationHash) -> Option<Via> {
+    let route = handle.route(destination).await?;
+    let s = state.lock().unwrap();
+    Some(match s.iface_entry.get(&route.interface) {
+        Some(id) => Via::Entry(id.clone()),
+        None => match route.interface.kind() {
+            Some(InterfaceKind::AutoWifi | InterfaceKind::WifiPeer) => Via::Wifi,
+            Some(InterfaceKind::BluetoothAuto | InterfaceKind::BluetoothPeer) => Via::Bluetooth,
+            _ => Via::Other,
+        },
+    })
+}
+
+/// The cap of the entry point `asker`'s route goes through (none: it does not go through an entry point, or the entry has none).
+/// The route table is asked first; with no route in it, the entry the asker's announce was last heard through.
+async fn asker_cap(handle: &PrnsNodeHandle, state: &Arc<Mutex<State>>, asker: PublicKey) -> Option<u64> {
+    let destination = state.lock().unwrap().destination_of.get(asker.as_bytes()).copied();
+    let via = match destination {
+        Some(d) => route_via(handle, state, d).await,
+        None => None,
+    };
+    let s = state.lock().unwrap();
+    let via = via.or_else(|| s.heard.get(asker.as_bytes()).cloned());
+    match via {
+        Some(Via::Entry(id)) => s.caps.get(&id).copied(),
+        _ => None,
+    }
+}
+
+/// How a route is named in the log: an entry point by its address, Wi-Fi, or anything else.
+fn route_label(s: &State, via: &Via) -> String {
+    match via {
+        Via::Wifi => "Wi-Fi".to_string(),
+        Via::Bluetooth => "Bluetooth".to_string(),
+        Via::Other => "other".to_string(),
+        Via::Entry(id) => s.entries.get(id).map_or("an entry point that was removed".to_string(), |e| e.wire.addr.clone()),
+    }
+}
+
+/// Records where `peer`'s route goes through and returns `(now, was)` when that is a different place than the last one recorded
+/// (never for the first route learned, and never for an unchanged one).
+fn note_route(s: &mut State, peer: [u8; 32], via: &Via) -> Option<(String, String)> {
+    let now = route_label(s, via);
+    match s.last_route.insert(peer, now.clone()) {
+        Some(was) if was != now => Some((now, was)),
+        _ => None,
+    }
+}
+
+/// A standard Reticulum path request for a stored destination; a returned path makes it reachable (over whatever
+/// transport nodes carry it: nothing here needs a direct neighbour). The interface it came in on is learned from the
+/// announce that answers, or else from the routing table ([`route_via`]).
+async fn find_path(
+    handle: &PrnsNodeHandle,
+    state: &Arc<Mutex<State>>,
+    peer: [u8; 32],
+    destination: DestinationHash,
+) -> bool {
+    match tokio::time::timeout(Duration::from_secs(10), handle.request_path(destination)).await {
+        Ok(Ok(_)) => {
+            // A path found by a request brings no announce of its own to hear (it may already be in the table), so the interface of
+            // the route is read from the routing table. An announce heard meanwhile (or before) has set the better answer: only
+            // "not known" and "anything else" give way to it.
+            let via = route_via(handle, state, destination).await.unwrap_or(Via::Other);
+            let mut s = state.lock().unwrap();
+            let mut moved = None;
+            match s.heard.get(&peer) {
+                None | Some(Via::Other) => {
+                    moved = note_route(&mut s, peer, &via);
+                    s.heard.insert(peer, via);
+                }
+                Some(_) => {}
+            }
+            let handler = s.handler.clone();
+            drop(s);
+            if let (Some((now, was)), Some(h), Ok(k)) = (moved, handler, PublicKey::from_bytes(&peer)) {
+                h.route_moved(k, &now, &was, RouteFrom::PathResponse);
+            }
+            true
+        }
+        _ => false,
+    }
+}
+
+/// The linked device whose hello checked out on `link`, if it still does: the identity on the link is the one the hello
+/// was for, and the device is still in the list.
+fn verified_device(s: &State, link: &LinkId, identity: Option<IdentityHash>) -> Option<PublicKey> {
+    let (device, hello_id) = s.verified.get(link)?;
+    if identity != Some(*hello_id) || !s.peers.contains(device) {
+        return None;
+    }
+    PublicKey::from_bytes(device).ok()
+}
+
+/// True when the hello on `link` verified a device that is no longer linked but is in the former set.
+fn verified_former_device(s: &State, link: &LinkId, identity: Option<IdentityHash>) -> bool {
+    let Some((device, hello_id)) = s.verified.get(link) else {
+        return false;
+    };
+    identity == Some(*hello_id) && !s.peers.contains(device) && s.former.contains(device)
 }
 
 /// Responses travel as a msgpack value, as RNS packs them; `respond_bytes` sends a msgpack bin. Unwraps it.
-fn unpack_bin(packed: Vec<u8>) -> Result<Vec<u8>> {
+pub(crate) fn unpack_bin(packed: Vec<u8>) -> Result<Vec<u8>> {
     let (len, head) = match packed.first() {
         Some(0xc4) if packed.len() >= 2 => (packed[1] as usize, 2),
         Some(0xc5) if packed.len() >= 3 => (u16::from_be_bytes([packed[1], packed[2]]) as usize, 3),
@@ -737,4 +1788,344 @@ fn exact(t: Duration) -> personal_rns::engine::RequestResponseTimeout {
     personal_rns::engine::RequestResponseTimeout::Exact(personal_rns::units::DurationMillis(
         t.as_millis() as u64,
     ))
+}
+
+/// What the node keeps of one entry point.
+struct Slot {
+    /// A salted hash of (host, port, network name, passphrase): an edit is a different fingerprint.
+    fp: [u8; 32],
+    /// What it takes to attach the interface again (the derived IFAC key, never the passphrase): a lost connection's routes are dropped
+    /// by detaching the interface, and a fresh one then keeps trying to reconnect.
+    wire: Wire,
+    /// Lost its connection: the old interface (same id as the next one will have) was forgotten, and the new one is attached once
+    /// the old one is gone from the node, since the same id re-attached too soon would be taken down with it.
+    reattach: Option<(InterfaceId, std::time::Instant)>,
+    on: bool,
+    /// Its interface while attached.
+    iid: Option<InterfaceId>,
+    t: Tracker,
+}
+
+/// The address and the derived IFAC key of an entry point (what [`attach_wire`] needs).
+struct Wire {
+    addr: String,
+    ifac: Option<IfacContext>,
+    name: Option<String>,
+}
+
+#[derive(Default)]
+struct Tracker {
+    attached_at: Option<std::time::Instant>,
+    /// The interface's connection state when last looked at.
+    conn: Option<ConnectionState>,
+    /// Since when it has not been Connected (first seen, from attach on).
+    not_connected_since: Option<std::time::Instant>,
+    /// A valid frame has arrived on this attachment (it passed IFAC and parsed: an announce was heard, or a route or link exists).
+    valid: bool,
+    announced_at: Option<std::time::Instant>,
+    /// Became Connected since the monitor last ran: announce once on it and ask for paths.
+    up_pending: bool,
+    /// Was online and now is Reconnecting, Failed or Disconnected, since the monitor last ran: its routes are dropped.
+    lost_pending: bool,
+    /// Connected and [`ENTRY_ANNOUNCE_EVERY`] has passed since the last announce on it.
+    due_pending: bool,
+}
+
+fn unix_ms() -> u64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_or(0, |d| d.as_millis() as u64)
+}
+
+fn judge(slot: &Slot, now: std::time::Instant) -> EntryState {
+    if !slot.on || (slot.iid.is_none() && slot.reattach.is_none()) {
+        return EntryState::Off;
+    }
+    let t = &slot.t;
+    match t.conn {
+        Some(ConnectionState::Connected | ConnectionState::Degraded) => {
+            if t.valid {
+                EntryState::Connected
+            } else {
+                EntryState::NothingHeard
+            }
+        }
+        Some(ConnectionState::Disabled) => EntryState::Off,
+        _ => {
+            let since = t.not_connected_since.or(t.attached_at);
+            if since.is_some_and(|c| now.duration_since(c) > NOT_ANSWERING_AFTER) {
+                EntryState::NotAnswering
+            } else {
+                EntryState::Connecting
+            }
+        }
+    }
+}
+
+/// Looks at every attached entry point's interface once and updates what is known of it.
+fn observe_entries(handle: &PrnsNodeHandle, state: &Arc<Mutex<State>>) {
+    if state.lock().unwrap().entries.values().all(|s| s.iid.is_none()) {
+        return;
+    }
+    let snaps = handle.interfaces();
+    let now = std::time::Instant::now();
+    let mut s = state.lock().unwrap();
+    for slot in s.entries.values_mut() {
+        let Some(iid) = slot.iid else { continue };
+        let Some(sn) = snaps.iter().find(|x| x.id == iid) else { continue };
+        let t = &mut slot.t;
+        let was_connected = matches!(t.conn, Some(ConnectionState::Connected));
+        let was_online = matches!(t.conn, Some(ConnectionState::Connected | ConnectionState::Degraded));
+        let connected = matches!(sn.connection, ConnectionState::Connected);
+        if was_online
+            && matches!(sn.connection, ConnectionState::Reconnecting | ConnectionState::Failed | ConnectionState::Disconnected)
+        {
+            t.lost_pending = true;
+        }
+        t.conn = Some(sn.connection);
+        if sn.destinations > 0 || sn.links > 0 {
+            t.valid = true;
+        }
+        if connected {
+            t.not_connected_since = None;
+            if !was_connected {
+                t.up_pending = true;
+                t.announced_at = Some(now);
+            } else if t.announced_at.is_some_and(|a| now.duration_since(a) >= ENTRY_ANNOUNCE_EVERY) {
+                t.due_pending = true;
+                t.announced_at = Some(now);
+            }
+        } else {
+            if t.not_connected_since.is_none() {
+                t.not_connected_since = Some(now);
+            }
+        }
+    }
+}
+
+/// Entry points: looks at them every second; when one has connected, announces on it once and sends path requests for every stored
+/// linked device; announces on a connected one again every [`ENTRY_ANNOUNCE_EVERY`].
+async fn entry_monitor(handle: PrnsNodeHandle, state: Arc<Mutex<State>>, me: DestinationHash) {
+    let mut tick = tokio::time::interval(ENTRY_POLL);
+    // Which interfaces were online when last looked at, and when the last re-announce for a drop was made (node-wide).
+    let mut was_online: HashMap<InterfaceId, bool> = HashMap::new();
+    let mut last_drop_announce: Option<std::time::Instant> = None;
+    loop {
+        tick.tick().await;
+        observe_entries(&handle, &state);
+        // An interface that was up and is not any more (an entry lost, Wi-Fi gone): once per [`DROP_REANNOUNCE_GAP`] at most, the node
+        // announces itself once on each interface still up, entries included, so peers learn the new path to it.
+        {
+            let snaps = handle.interfaces();
+            let online = |c: ConnectionState| matches!(c, ConnectionState::Connected | ConnectionState::Degraded);
+            let dropped = snaps.iter().any(|x| was_online.get(&x.id) == Some(&true) && !online(x.connection));
+            was_online = snaps.iter().map(|x| (x.id, online(x.connection))).collect();
+            let now = std::time::Instant::now();
+            if dropped && last_drop_announce.is_none_or(|t| now.duration_since(t) >= DROP_REANNOUNCE_GAP) {
+                last_drop_announce = Some(now);
+                for x in snaps.iter().filter(|x| online(x.connection)) {
+                    let _ = handle
+                        .announce_now(AnnounceNow {
+                            destination: me,
+                            target: AnnounceTarget::Interface(x.id),
+                            app_data: AnnounceAppData::Data(Default::default()),
+                        })
+                        .await;
+                }
+            }
+        }
+        let (announce, connected, dests, lost) = {
+            let mut s = state.lock().unwrap();
+            // Entries that lost their connection: their routes go, and the devices reached through them are asked for a path at once
+            // (a path through another entry, or Wi-Fi, is then learned); the periodic loop keeps asking while they are unreachable.
+            let ids: Vec<String> = s
+                .entries
+                .iter_mut()
+                .filter_map(|(id, sl)| std::mem::take(&mut sl.t.lost_pending).then(|| id.clone()))
+                .collect();
+            let mut lost = Vec::new();
+            for id in ids {
+                lost.extend(drop_lost_entry(&handle, &mut s, &id));
+            }
+            finish_reattach(&handle, &mut s);
+            let mut announce = Vec::new();
+            let mut connected = false;
+            for slot in s.entries.values_mut() {
+                let Some(iid) = slot.iid else { continue };
+                if slot.t.up_pending {
+                    slot.t.up_pending = false;
+                    slot.t.due_pending = false;
+                    announce.push(iid);
+                    connected = true;
+                } else if slot.t.due_pending {
+                    slot.t.due_pending = false;
+                    announce.push(iid);
+                }
+            }
+            let dests: Vec<([u8; 32], DestinationHash)> =
+                s.destination_of.iter().map(|(k, d)| (*k, *d)).collect();
+            (announce, connected, dests, lost)
+        };
+        for (k, d) in lost {
+            let (handle, state) = (handle.clone(), state.clone());
+            tokio::spawn(async move {
+                find_path(&handle, &state, k, d).await;
+            });
+        }
+        for iid in announce {
+            let _ = handle
+                .announce_now(AnnounceNow {
+                    destination: me,
+                    target: AnnounceTarget::Interface(iid),
+                    app_data: AnnounceAppData::Data(Default::default()),
+                })
+                .await;
+        }
+        if connected {
+            // Every stored linked device, at once (the periodic loop asks only for the ones not heard yet).
+            for (k, d) in dests {
+                let (handle, state) = (handle.clone(), state.clone());
+                tokio::spawn(async move {
+                    find_path(&handle, &state, k, d).await;
+                });
+            }
+        }
+    }
+}
+
+/// The periodic announce: on every interface except the entry points.
+async fn announce_off_entries(handle: &PrnsNodeHandle, state: &Arc<Mutex<State>>, me: DestinationHash) {
+    let ids: Vec<InterfaceId> = {
+        let s = state.lock().unwrap();
+        handle
+            .interfaces()
+            .iter()
+            .map(|x| x.id)
+            .filter(|id| !s.iface_entry.contains_key(id))
+            .collect()
+    };
+    for id in ids {
+        let _ = handle
+            .announce_now(AnnounceNow {
+                destination: me,
+                target: AnnounceTarget::Interface(id),
+                app_data: AnnounceAppData::Data(Default::default()),
+            })
+            .await;
+    }
+}
+
+fn fingerprint(salt: &[u8; 32], e: &EntryPoint) -> [u8; 32] {
+    let mut h = blake3::Hasher::new_keyed(salt);
+    let field = |h: &mut blake3::Hasher, b: &[u8]| {
+        h.update(&(b.len() as u64).to_le_bytes());
+        h.update(b);
+    };
+    field(&mut h, e.host.as_bytes());
+    field(&mut h, &e.port.to_le_bytes());
+    field(&mut h, e.network_name.as_deref().unwrap_or("").as_bytes());
+    field(&mut h, e.passphrase.as_ref().map_or("", |p| p.as_str()).as_bytes());
+    *h.finalize().as_bytes()
+}
+
+/// Detaches an entry point's interface (dropping its routes at once) and forgets what was heard through it.
+fn detach_entry(handle: &PrnsNodeHandle, s: &mut State, id: &str) {
+    let Some(slot) = s.entries.get_mut(id) else { return };
+    slot.reattach = None;
+    if let Some(iid) = slot.iid.take() {
+        handle.forget_interface(iid);
+        s.iface_entry.remove(&iid);
+    }
+    let me = Via::Entry(id.to_string());
+    s.heard.retain(|_, v| *v != me);
+}
+
+fn wire_of(e: &EntryPoint) -> Wire {
+    let host = if e.host.contains(':') && !e.host.starts_with('[') { format!("[{}]", e.host) } else { e.host.clone() };
+    let name = e.network_name.clone().filter(|n| !n.is_empty());
+    let pass = e.passphrase.clone().filter(|p| !p.is_empty());
+    // WIDE, as Prns's config gives a TCP client and RNS's TCP default. The copy of the passphrase is wiped as it goes out of scope.
+    let ifac = IfacContext::derive(name.as_deref(), pass.as_ref().map(|p| p.as_str()), IfacSize::WIDE);
+    drop(pass);
+    Wire { addr: format!("{host}:{}", e.port), ifac, name }
+}
+
+fn attach_wire(handle: &PrnsNodeHandle, w: &Wire) -> InterfaceId {
+    let client = TcpClientInterface::new(w.addr.clone());
+    let attached = match w.ifac.clone() {
+        Some(ifac) => handle.attach_with_ifac_name(client, ifac, w.name.clone()),
+        None => handle.attach(client),
+    };
+    attached.id()
+}
+
+fn attach_entry(handle: &PrnsNodeHandle, s: &mut State, e: &EntryPoint) {
+    let Some(slot) = s.entries.get_mut(&e.id) else { return };
+    let iid = attach_wire(handle, &slot.wire);
+    slot.iid = Some(iid);
+    slot.t = Tracker { attached_at: Some(std::time::Instant::now()), ..Default::default() };
+    s.iface_entry.insert(iid, e.id.clone());
+}
+
+/// An entry point that was online and has lost its connection: the routes learned through it point at a dead interface, and Prns
+/// keeps routing through them (a path response for the same announce does not replace a live-looking route), so the interface is
+/// detached with its routes dropped at once and attached again (it keeps reconnecting), and what was heard through it is
+/// forgotten. Returns the linked devices that were reached through it: they are asked for a path now.
+fn drop_lost_entry(handle: &PrnsNodeHandle, s: &mut State, id: &str) -> Vec<([u8; 32], DestinationHash)> {
+    let me = Via::Entry(id.to_string());
+    let lost: Vec<[u8; 32]> = s.heard.iter().filter(|(_, v)| **v == me).map(|(k, _)| *k).collect();
+    let Some(slot) = s.entries.get_mut(id) else { return Vec::new() };
+    let Some(old) = slot.iid.take() else { return Vec::new() };
+    let now = std::time::Instant::now();
+    handle.forget_interface(old);
+    // Still not answering since the old connection was lost; a new connection (nothing seen on it yet) is attached in a moment.
+    slot.t = Tracker { attached_at: Some(now), not_connected_since: Some(slot.t.not_connected_since.unwrap_or(now)), ..Default::default() };
+    slot.reattach = Some((old, now));
+    s.iface_entry.remove(&old);
+    s.heard.retain(|_, v| *v != me);
+    lost.into_iter().filter_map(|k| s.destination_of.get(&k).map(|d| (k, *d))).collect()
+}
+
+/// Attaches the interface of every entry point that lost its connection, once the old one is gone from the node (or after 5 s).
+fn finish_reattach(handle: &PrnsNodeHandle, s: &mut State) {
+    if s.entries.values().all(|sl| sl.reattach.is_none()) {
+        return;
+    }
+    let present: Vec<InterfaceId> = handle.interfaces().iter().map(|x| x.id).collect();
+    let ids: Vec<String> = s
+        .entries
+        .iter()
+        .filter(|(_, sl)| sl.reattach.is_some_and(|(old, at)| !present.contains(&old) || at.elapsed() >= Duration::from_secs(5)))
+        .map(|(id, _)| id.clone())
+        .collect();
+    for id in ids {
+        let Some(slot) = s.entries.get_mut(&id) else { continue };
+        slot.reattach = None;
+        let iid = attach_wire(handle, &slot.wire);
+        slot.iid = Some(iid);
+        slot.t.attached_at = Some(std::time::Instant::now());
+        s.iface_entry.insert(iid, id);
+    }
+}
+
+fn apply_entries(handle: &PrnsNodeHandle, state: &Arc<Mutex<State>>, salt: &[u8; 32], entries: &[EntryPoint]) {
+    let mut s = state.lock().unwrap();
+    let want: HashSet<&str> = entries.iter().map(|e| e.id.as_str()).collect();
+    let gone: Vec<String> = s.entries.keys().filter(|k| !want.contains(k.as_str())).cloned().collect();
+    for id in gone {
+        detach_entry(handle, &mut s, &id);
+        s.entries.remove(&id);
+    }
+    for e in entries {
+        let fp = fingerprint(salt, e);
+        // Already as wanted: same settings, and attached exactly when it is on.
+        if s.entries.get(&e.id).is_some_and(|sl| sl.fp == fp && (sl.iid.is_some() || sl.reattach.is_some()) == e.on) {
+            continue;
+        }
+        detach_entry(handle, &mut s, &e.id);
+        s.entries.insert(e.id.clone(), Slot { fp, wire: wire_of(e), reattach: None, on: e.on, iid: None, t: Tracker::default() });
+        if e.on {
+            attach_entry(handle, &mut s, e);
+        }
+    }
 }

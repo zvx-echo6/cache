@@ -13,6 +13,9 @@ import '../settings/data_kinds.dart';
 import '../settings/data_policy.dart';
 import '../settings/space.dart' show reserveFor, totalBytesOnDisk;
 import '../platform/app_log.dart';
+import '../platform/multicast_lock.dart';
+import '../platform/bluetooth.dart';
+import 'bluetooth_session.dart';
 import 'identity_keep.dart';
 import 'install_marker.dart';
 import 'share_rules.dart' show kSettingsShareId;
@@ -40,6 +43,10 @@ class SharingState extends ChangeNotifier {
     SyncOpener? opener,
     int Function(String dir)? reserveBytes,
     bool? phone,
+    bool? reticulum,
+    MulticastLock? multicast,
+    BluetoothPlatform? bluetooth,
+    String? Function()? deviceKind,
     void Function(String line)? log,
     Timer Function(Duration after, void Function() run)? timer,
     List<String> Function()? drainLog,
@@ -53,6 +60,13 @@ class SharingState extends ChangeNotifier {
        _drainLog = drainLog ?? drainSyncLog,
        _every = every ?? ((d, run) => Timer.periodic(d, (_) => run())),
        _phone = phone ?? (!kIsWeb && (Platform.isAndroid || Platform.isIOS)),
+       // Reticulum runs on Android, Linux and iOS, not in a browser.
+       _reticulum = reticulum ?? (!kIsWeb && (Platform.isAndroid || Platform.isLinux || Platform.isIOS)),
+       // Android needs a multicast lock held while it runs; nothing else does.
+       _multicast = multicast ?? (!kIsWeb && Platform.isAndroid ? MulticastLock() : null),
+       _bluetoothPlatform = bluetooth ?? (!kIsWeb && (Platform.isAndroid || Platform.isIOS) ? BluetoothPlatform() : null),
+       // The kind travels only in the Nearby name request: Android says phone or tablet; nothing else says.
+       _deviceKind = deviceKind ?? (!kIsWeb && Platform.isAndroid ? _androidKind : () => null),
        _reserveBytes = reserveBytes ?? _storageReserve,
        _opener = opener ?? openSyncCore,
        // The install marker (install_marker.dart) is for Android and iPhone only: on Linux the folder is a file in the person's own
@@ -122,6 +136,24 @@ class SharingState extends ChangeNotifier {
   /// linked devices are still found by mDNS, n0's lookup and the relay. Anywhere else (the server, the desktop) the engine's default (on) stands.
   final bool _phone;
 
+  /// The engine runs Reticulum's Wi-Fi discovery (the config key `reticulum`): Android, Linux and iOS. Peers found that way say `via: 'wifi'`.
+  final bool _reticulum;
+
+  /// What this device calls itself in the Nearby name request (`phone`, `tablet`), or null to leave it out.
+  final String? Function() _deviceKind;
+
+  /// Android: a tablet when the shortest screen side is 600 dp or more, otherwise a phone.
+  static String? _androidKind() {
+    final views = PlatformDispatcher.instance.views;
+    if (views.isEmpty) return null;
+    final v = views.first;
+    return deviceKindForShortestSide(v.physicalSize.shortestSide / v.devicePixelRatio);
+  }
+
+  /// The Android multicast lock, taken just before the engine opens and let go when it stops; null where none is needed.
+  final MulticastLock? _multicast;
+  final BluetoothPlatform? _bluetoothPlatform;
+
   /// What Cache leaves free on the phone, for the volume holding a folder: the same rule Storage shows ([reserveFor]).
   final int Function(String dir) _reserveBytes;
 
@@ -156,6 +188,22 @@ class SharingState extends ChangeNotifier {
   late final SharingDriver _driver = _remote != null ? _WebDriver(this, _remote) : _PhoneDriver(this);
 
   String? error;
+  bool bluetoothWanted = false;
+  BluetoothStatus bluetoothStatus = const BluetoothStatus();
+
+  Future<void> setBluetooth(bool on) async {
+    final driver = _driver;
+    if (driver is! _PhoneDriver || _bluetoothPlatform == null) throw UnsupportedError('Bluetooth is not available on this device');
+    await driver.setBluetooth(on);
+  }
+
+  Future<void> allowBluetooth() async {
+    final platform = _bluetoothPlatform;
+    final driver = _driver;
+    if (platform == null || driver is! _PhoneDriver) return;
+    await platform.requestPermissions();
+    await driver._applyPolicy();
+  }
   Map<String, dynamic> status = const {};
 
   /// Whether this is Cache Server seen from a browser (the server's sharing host drives it), not a phone or a desktop.
@@ -356,6 +404,70 @@ class SharingState extends ChangeNotifier {
 
   String get name => (status['name'] as String?) ?? deviceName;
 
+  /// The entry points the person entered (the engine's `entry_points`), as last read; empty until the first read, and in a browser
+  /// (Cache Server's sharing host does not carry them yet).
+  List<EntryPoint> entries = const [];
+
+  /// The entry point with this id, or null (removed, or not read yet).
+  EntryPoint? entryOf(String id) => entries.where((e) => e.id == id).firstOrNull;
+
+  /// The host of the entry point [id], or null when it is not in the list.
+  String? entryHostOf(String id) => entryOf(id)?.host;
+
+  /// How many entry points are on (the count the Sharing page says).
+  int get entriesOn => entries.where((e) => e.on).length;
+
+  /// The id of the entry point a route comes in through (`entry:ID` in a peer's `via`), or null for any other route.
+  static String? entryIdOfVia(Object? via) => via is String && via.startsWith('entry:') ? via.substring(6) : null;
+
+  /// How many of the linked devices answer through the entry point [id] right now.
+  int onlineThrough(String id) => peers.where((p) => p['live'] != false && p['error'] == null && entryIdOfVia(p['via']) == id).length;
+
+  /// How the link to the linked device [peer] is judged now ("fast", "medium" or "slow"; step 3), or null when the engine does not say.
+  String? speedOf(String peer) => peerOf(peer)?['speed'] as String?;
+
+  /// What the engine holds back from [peer] until a faster connection (`waiting` in the status): `{peer, peer_name, share_id, share,
+  /// path, what: "file" or "list", size, reason}`.
+  List<Map<String, dynamic>> waitingFor(String peer) => [
+    for (final w in (status['waiting'] as List? ?? const []))
+      if (w is Map && w['peer'] == peer) w.cast<String, dynamic>(),
+  ];
+
+  /// Reads the entry points again (the poll does it with the status).
+  Future<void> refreshEntries() => _driver.refresh();
+
+  /// Adds an entry point (no [id]) or edits one. A field left null stays as it was; a [passphrase] left null keeps the one saved.
+  /// Returns the id. The engine refuses an address it can't use, a port outside 1 to 65535, a private one with no network name or
+  /// passphrase, and one already in the list, each with its own plain message.
+  Future<String> entryPointSet({
+    String? id,
+    String? host,
+    int? port,
+    bool? private,
+    String? networkName,
+    String? passphrase,
+    bool? on,
+    int? capBytes,
+  }) async {
+    final r = await _call('entry_point_set', {
+      'id': ?id,
+      'host': ?host,
+      'port': ?port,
+      'private': ?private,
+      'network_name': ?networkName,
+      'passphrase': ?passphrase,
+      'on': ?on,
+      'cap_bytes': ?capBytes,
+    });
+    return (r['id'] as String?) ?? id ?? '';
+  }
+
+  /// Turns one entry point on or off (off keeps its settings).
+  Future<void> entryPointOn(String id, bool on) => _call('entry_point_on', {'id': id, 'on': on});
+
+  /// Removes one entry point from this device and every linked device.
+  Future<void> entryPointRemove(String id) => _call('entry_point_remove', {'id': id});
+
   final List<Map<String, dynamic>> _extraLog = [];
 
   /// A line this app adds to the Activity (the notebook sync's: the engine's own log has the file transfers).
@@ -386,6 +498,9 @@ class SharingState extends ChangeNotifier {
 
   /// What linked devices offer for [k]'s folders.
   List<Map<String, dynamic>> offersOfKind(DataKind k) => [for (final id in k.shared().keys) ...offersOf(id)];
+
+  /// An engine call that does not refresh the status after it: what the Nearby page asks every half second (see nearby.dart).
+  Future<Map<String, dynamic>> callQuiet(String method, [Map<String, Object?> args = const {}]) => _driver.callQuiet(method, args);
 
   Future<String> linkCode() async => (await _call('link_code'))['code'] as String;
 
@@ -425,8 +540,9 @@ class SharingState extends ChangeNotifier {
   }
 
   /// What to tell the person right after a Sync now, from the last status read: nothing reaches any device (no linked device, or no
-  /// folder in [shareIds] kept with one: every folder when null, and only [peer] when given); something still to fetch or a
-  /// transfer running (then [working], the line the page already showed); or nothing new ("Up to date"). Only what the person
+  /// folder in [shareIds] kept with one: every folder when null, and only [peer] when given); something still to fetch, a
+  /// transfer running here, or a linked device fetching from this one (then [working], the line the page already showed); or
+  /// nothing new ("Up to date"). Only what the person
   /// would call shared counts: a folder of a kind switched on, and the settings log (which the engine keeps from a device whose
   /// settings sync is Off); never the folders the app always shares (the search indexes, the Bookshelves log). A folder with no
   /// `with` goes to every linked device; otherwise `with` lists link kinds (a device's `link.mode`, "match" when it has none), and
@@ -445,7 +561,11 @@ class SharingState extends ChangeNotifier {
     ];
     if (scoped.isEmpty) return 'Nothing is shared yet';
     final pending = scoped.any((sh) => ((sh['pending_files'] as num?) ?? 0) > 0);
-    return pending || transfer != null ? working : 'Up to date';
+    // A transfer to a device that only this one sends to shows nowhere here, so each device says when it is fetching (the engine's
+    // `fetching` on a linked device, as of the last time this one asked it).
+    final scopedIds = {for (final sh in scoped) sh['id']};
+    final sending = devices.any((p) => scopedIds.contains((p['fetching'] as Map?)?['share']));
+    return pending || sending || transfer != null ? working : 'Up to date';
   }
 
   /// Switches one kind on or off: every folder of it. Switching it on shares every item (a private one stays as it is); off
@@ -480,6 +600,9 @@ abstract class SharingDriver {
 
   /// One engine method, then the status read again. Throws when sharing is not set up.
   Future<Map<String, dynamic>> call(String method, [Map<String, Object?> args = const {}]);
+
+  /// [call] without the status refresh after it (the Nearby page's 500 ms polling).
+  Future<Map<String, dynamic>> callQuiet(String method, [Map<String, Object?> args = const {}]);
   Future<({String peer, String name})> link(String code);
   Future<void> setShared(DataKind k, bool on);
   Future<void> setItem(DataKind k, ShareItem it, bool on);
@@ -504,6 +627,10 @@ class _PhoneDriver implements SharingDriver {
   final SharingState s;
 
   SyncCoreLike? _core;
+  late final BluetoothSession? _bluetooth = s._bluetoothPlatform == null ? null : BluetoothSession(s._bluetoothPlatform!);
+  Future<void>? _policyTail;
+  bool _disposed = false;
+  bool _tickBusy = false;
   bool _enabled = false;
   bool _starting = false;
   Timer? _poll;
@@ -543,7 +670,8 @@ class _PhoneDriver implements SharingDriver {
           ..clear()
           ..addAll({for (final e in off.entries) if (e.value is List) '${e.key}': {for (final k in e.value as List) '$k'}});
       }
-      // Everything _save writes (enabled, off, ask_since) is loaded before any save, or a save would overwrite the file with defaults.
+      // Everything _save writes is loaded before a migration save, including this device's Bluetooth choice.
+      s.bluetoothWanted = j['bluetooth'] == true;
       final enabled = j['enabled'] == true;
       _enabled = enabled;
       final since = j['ask_since'];
@@ -571,6 +699,7 @@ class _PhoneDriver implements SharingDriver {
       f,
       jsonEncode({
         'enabled': _enabled,
+        if (s.bluetoothWanted) 'bluetooth': true,
         'ask_since': ?s._askSince,
         if (s.newDevice) 'new_device': true,
         if (_off.values.any((v) => v.isNotEmpty)) 'off': {for (final e in _off.entries) if (e.value.isNotEmpty) e.key: [...e.value]..sort()},
@@ -643,7 +772,12 @@ class _PhoneDriver implements SharingDriver {
       final config = <String, Object?>{
         'dir': dir.path,
         'name': s.deviceName,
+        // No outgoing round starts before the current per-carrier policy has been applied.
+        'network': false,
         if (s._phone) 'dht': false,
+        // Reticulum's Wi-Fi discovery (the engine's `reticulum`; a peer it finds says `via: 'wifi'`).
+        'reticulum': s._reticulum,
+        'device_kind': ?s._deviceKind(),
         // The engine keeps the same space free as Storage shows, so This device and Storage agree.
         'reserve_bytes': s._reserveBytes((await s.supportDir()).path),
         'exclude': {for (final k in kinds) ...k.notShared, for (final a in always) a.id: a.exclude},
@@ -664,6 +798,11 @@ class _PhoneDriver implements SharingDriver {
         if (!makeIdentity) 'make_identity': false,
       };
       _lastConfig = config;
+      // Android hears multicast only while the lock is held; a lock that can't be taken leaves Wi-Fi discovery quiet, not sharing stopped.
+      if (s._reticulum && s._multicast != null) {
+        _holdsMulticast = true;
+        await s._multicast!.acquire();
+      }
       _core = await s._opener(config);
       lock.engineStarted(kSyncWork);
       // A key the engine has just made (every copy was gone) is kept now; a copy that cannot be written is tried at the next start.
@@ -695,6 +834,7 @@ class _PhoneDriver implements SharingDriver {
       s._log('Sharing: started in ${(took.elapsedMilliseconds / 1000).toStringAsFixed(1)} s');
     } catch (e) {
       s.error = 'Sharing could not start: ${e is CacheSearchException ? e.message : e}';
+      if (_core == null) _releaseMulticast();
       // The kind of failure only: the text can carry paths, and this log is shared.
       s._log('Sharing: start failed after ${(took.elapsedMilliseconds / 1000).toStringAsFixed(1)} s (${e is CacheSearchException ? e.code : e.runtimeType})');
     } finally {
@@ -819,6 +959,14 @@ class _PhoneDriver implements SharingDriver {
 
   bool? _lastMobile;
 
+  Future<void> setBluetooth(bool on) async {
+    s.bluetoothWanted = on;
+    await _save();
+    if (on && s.bluetoothStatus.permissions.isNotEmpty) await s._bluetoothPlatform!.requestPermissions();
+    await _applyPolicy();
+    if (!_disposed) s._changed();
+  }
+
   void _onSettings() {
     if (_lastMobile == policy.settings.mobileForDownloads) return;
     _lastMobile = policy.settings.mobileForDownloads;
@@ -826,10 +974,31 @@ class _PhoneDriver implements SharingDriver {
   }
 
   /// Sync uses the network the way downloads do: Wi-Fi and other connections always, mobile data only when downloads may use it.
-  Future<void> _applyPolicy() async {
+  Future<void> _applyPolicy() {
+    final previous = _policyTail;
+    late final Future<void> next;
+    next = (previous == null ? _applyCurrentPolicy()
+        : previous.then<void>((_) => _applyCurrentPolicy(), onError: (Object _) => _applyCurrentPolicy()))
+        .whenComplete(() { if (identical(_policyTail, next)) _policyTail = null; });
+    _policyTail = next;
+    return next;
+  }
+
+  Future<void> _applyCurrentPolicy() async {
+    if (_disposed) return;
     final kind = await policy.probe.current();
     final ok = kind != ConnectionKind.none && !(kind == ConnectionKind.mobile && !policy.settings.mobileForDownloads);
-    await _core?.call('set_policy', {'network': ok});
+    final core = _core;
+    if (_disposed || core == null) return;
+    final bluetooth = _bluetooth;
+    if (bluetooth == null) {
+      await core.call('set_policy', {'network': ok});
+    } else {
+      final state = await bluetooth.reconcile(wanted: s.bluetoothWanted, ipAllowed: ok, core: (m, a) => core.call(m, a));
+      if (_disposed) return;
+      s.bluetoothStatus = state;
+      s._changed();
+    }
   }
 
   @override
@@ -838,7 +1007,13 @@ class _PhoneDriver implements SharingDriver {
     if (c == null) return;
     try {
       s.status = await c.call('status');
+      s._drainNow();
       s._noteShareChanges();
+      s._changed();
+    } catch (_) {}
+    // The entry points (step 4); an engine without them leaves the list as it was.
+    try {
+      s.entries = EntryPoint.listFrom(await c.call('entry_points'));
       s._changed();
     } catch (_) {}
   }
@@ -848,19 +1023,26 @@ class _PhoneDriver implements SharingDriver {
   /// Every 2 s the status; every 10 s what each linked device holds, and the items' list given to the engine again if it
   /// changed (a notebook made private, a new library here).
   Future<void> _tick() async {
-    // The engine's lines said since the last look (the one-time store move's summary, left-out files and dropped tags) go to
-    // the app's log (cache.log) as well as the Activity.
-    s._drainNow();
-    await refresh();
-    if (++_ticks % 5 == 0) {
-      await refreshItems();
-      await _applyOff();
-      await _writeSnapshot();
+    if (_disposed || _tickBusy) return;
+    _tickBusy = true;
+    try {
+      if (_bluetooth != null) await _applyPolicy();
+      // The engine's lines said since the last look (the one-time store move's summary, left-out files and dropped tags) go to
+      // the app's log (cache.log) as well as the Activity.
+      s._drainNow();
+      await refresh();
+      if (++_ticks % 5 == 0) {
+        await refreshItems();
+        await _applyOff();
+        await _writeSnapshot();
+      }
+      // Photos follow the shared entries without waiting for a sync.
+      if (_ticks % 15 == 0) await refreshGate();
+      // Refresh the app-engine mark every 30 seconds.
+      if (_ticks % 15 == 0) _lock?.engineStarted(kSyncWork);
+    } finally {
+      _tickBusy = false;
     }
-    // The photos that may be sent follow the entries (an entry made private, a photo taken off one) without waiting for a sync.
-    if (_ticks % 15 == 0) await refreshGate();
-    // The mark that this app's engine runs (a background round never opens a second one), written again every 30 s.
-    if (_ticks % 15 == 0) _lock?.engineStarted(kSyncWork);
   }
 
   BackgroundLock? _lock;
@@ -1054,6 +1236,13 @@ class _PhoneDriver implements SharingDriver {
   }
 
   @override
+  Future<Map<String, dynamic>> callQuiet(String m, [Map<String, Object?> a = const {}]) async {
+    final c = _core;
+    if (c == null) throw const CacheSearchException('sync', 'Sharing is not set up');
+    return c.call(m, a);
+  }
+
+  @override
   Future<({String peer, String name})> link(String code) async {
     final r = await call('link', {'code': code});
     return (peer: r['peer'] as String? ?? '', name: r['name'] as String? ?? 'the other device');
@@ -1089,13 +1278,24 @@ class _PhoneDriver implements SharingDriver {
 
   @override
   void dispose() {
+    _disposed = true;
     _slowStart?.cancel();
     _drain?.cancel();
     _poll?.cancel();
     _net?.cancel();
     if (_core != null) policy.settings.removeListener(_onSettings);
     _lock?.engineStopped(kSyncWork);
+    unawaited(_bluetooth?.close().catchError((Object e) { s._log('Sharing: Bluetooth shutdown failed (${e.runtimeType})'); }));
     _core?.close();
+    _releaseMulticast();
+  }
+
+  bool _holdsMulticast = false;
+
+  void _releaseMulticast() {
+    if (!_holdsMulticast) return;
+    _holdsMulticast = false;
+    unawaited(s._multicast?.release());
   }
 }
 
@@ -1154,6 +1354,7 @@ class _WebDriver implements SharingDriver {
       ..addAll({if (inc is List) for (final x in inc) '$x'});
     final st = snap['status'];
     s.status = st is Map ? st.cast<String, dynamic>() : const {};
+    s._drainNow();
     s._noteShareChanges();
     s._noteSettingsApplied(snap['settings_applied']);
     s._changed();
@@ -1236,6 +1437,12 @@ class _WebDriver implements SharingDriver {
     return r;
   }
 
+  @override
+  Future<Map<String, dynamic>> callQuiet(String method, [Map<String, Object?> args = const {}]) async {
+    if (!_running) throw const CacheSearchException('sync', 'Sharing is not set up');
+    return _op('sharing.call', {'method': method, 'args': args});
+  }
+
   /// Starts the link on the server (which returns at once) and reads its progress until it is done or has failed.
   @override
   Future<({String peer, String name})> link(String code) async {
@@ -1297,6 +1504,62 @@ class _WebDriver implements SharingDriver {
 /// A folder linked devices keep the same whatever the person ticks, and its sync rules (the sync engine's patterns, see
 /// cache_sync's Config): [exclude] never travels, a delete under [localDeletes] stays on the device that made it, a file under
 /// [last] comes after the rest of what arrives with it. What it fetches is set with [SharingState.setOnly].
+/// An entry point: an rnsd the person entered (address and port, plus a network name and passphrase for a private one), as the
+/// engine's `entry_points` lists it. The passphrase is never given back, only whether there is one.
+class EntryPoint {
+  const EntryPoint({
+    required this.id,
+    required this.host,
+    required this.port,
+    this.private = false,
+    this.networkName,
+    this.hasPassphrase = false,
+    this.on = true,
+    this.capBytes = defaultCapBytes,
+    this.state = 'connecting',
+    this.checked,
+  });
+
+  /// The biggest file that goes through an entry point unless the person says otherwise (50 MB).
+  static const int defaultCapBytes = 50 * 1024 * 1024;
+
+  final String id;
+  final String host;
+  final int port;
+  final bool private;
+  final String? networkName;
+  final bool hasPassphrase;
+  final bool on;
+  final int capBytes;
+
+  /// Where it stands now: `off`, `connecting`, `connected`, `not_answering`, `nothing_heard` or `not_running`.
+  final String state;
+
+  /// When that was looked at (ms since the Unix epoch).
+  final int? checked;
+
+  static EntryPoint? from(Object? v) {
+    if (v is! Map || v['id'] is! String || v['host'] is! String) return null;
+    return EntryPoint(
+      id: v['id'] as String,
+      host: v['host'] as String,
+      port: (v['port'] as num?)?.toInt() ?? 0,
+      private: v['private'] == true,
+      networkName: v['network_name'] as String?,
+      hasPassphrase: v['has_passphrase'] == true,
+      on: v['on'] != false,
+      capBytes: (v['cap_bytes'] as num?)?.toInt() ?? defaultCapBytes,
+      state: (v['status'] as String?) ?? 'connecting',
+      checked: (v['checked'] as num?)?.toInt(),
+    );
+  }
+
+  /// The list the engine's `entry_points` answers (`{"entries": [...]}`).
+  static List<EntryPoint> listFrom(Map<String, dynamic> r) => [
+    for (final e in (r['entries'] as List? ?? const [])) ?from(e),
+  ];
+}
+
 class AlwaysShared {
   const AlwaysShared({
     required this.id,
@@ -1397,3 +1660,6 @@ class _RealCore implements SyncCoreLike {
   @override
   Future<void> close() => _c.close();
 }
+
+/// `tablet` when the shortest screen side is 600 dp or more, otherwise `phone` (Android's own rule of thumb).
+String deviceKindForShortestSide(double dp) => dp >= 600 ? 'tablet' : 'phone';

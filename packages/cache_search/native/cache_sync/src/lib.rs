@@ -17,15 +17,22 @@
 
 pub mod blobs;
 pub mod bridge;
+pub mod delta;
+pub mod entries;
 pub mod identity;
 pub mod index;
 pub mod transport;
+mod ip_policy;
+#[cfg(any(target_os = "linux", target_os = "android", target_os = "ios"))]
+mod rns_transport;
+#[cfg(target_os = "android")]
+pub use cache_rns::bluetooth::{android_bridge, AndroidBleBridge, AndroidBleIngressAdmission, ANDROID_BLE_PEER_CAPACITY};
 
 use anyhow::{anyhow, bail, Context, Result};
 use index::{Action, Entry, Index, Ver};
 use iroh::{
     endpoint::{presets, VarInt},
-    Endpoint, EndpointAddr, RelayMode, RelayUrl,
+    Endpoint, EndpointAddr, PublicKey, RelayMode, RelayUrl, SecretKey, Signature,
 };
 use blobs::Blobs;
 use cache_store::{Hash, Options as StoreOptions, Store};
@@ -33,7 +40,7 @@ use n0_future::StreamExt;
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use std::{
-    collections::{BTreeMap, HashMap, HashSet},
+    collections::{BTreeMap, BTreeSet, HashMap, HashSet},
     path::{Path, PathBuf},
     sync::{
         atomic::{AtomicBool, AtomicU32, AtomicU64, AtomicUsize, Ordering},
@@ -42,7 +49,7 @@ use std::{
     time::{Duration, Instant, SystemTime, UNIX_EPOCH},
 };
 use tokio::sync::Notify;
-use transport::{Ask, FetchEvent, IrohTransport, Serve, Transport};
+use transport::{Ask, Delta, FetchEvent, IrohTransport, PairTarget, Serve, Speed, Transport};
 
 /// Linking: open to any key, but only with the one-time code a device is showing.
 pub const PAIR_ALPN: &[u8] = b"cache/pair/1";
@@ -88,6 +95,21 @@ pub fn take_log() -> Vec<String> {
     std::mem::take(&mut *LOG_BUF.lock().unwrap_or_else(|l| l.into_inner()))
 }
 
+/// The cache.log line for a Reticulum link that closed. Prns's close event carries the reason only (not the keepalive or the
+/// time of the last packet), so the line has the reason, how long the link was open and the round trip time it opened with.
+fn link_closed_line(name: &str, reason: &str, open_secs: Option<u64>, rtt_ms: Option<u64>) -> String {
+    let after = open_secs.map(|s| format!(" after {s} s")).unwrap_or_default();
+    let rtt = rtt_ms.map(|r| format!(" (rtt {r} ms)")).unwrap_or_default();
+    format!("reticulum link to {name} closed: {reason}{after}{rtt}")
+}
+
+/// The cache.log line for a linked device's route that moved to another entry point or interface. `from` is what taught it
+/// (cache_rns says "an announce" or "a path response"; Prns's announce event does not tell the two apart, so a heard announce
+/// is always "an announce").
+fn route_moved_line(name: &str, now: &str, was: &str, from: &str) -> String {
+    format!("reticulum route to {name} now through {now} (was {was}), from {from}")
+}
+
 /// The steps of one open, each said with the milliseconds since the open began (into [`take_log`]'s buffer).
 struct OpenSteps(Instant);
 
@@ -102,12 +124,55 @@ fn say(line: &str) {
 
 impl OpenSteps {
     fn step(&self, name: &str) {
-        let line = format!("sync open: {name} +{} ms", self.0.elapsed().as_millis());
-        let mut b = LOG_BUF.lock().unwrap_or_else(|l| l.into_inner());
-        if b.len() >= LOG_KEEP {
-            b.remove(0);
-        }
-        b.push(line);
+        say(&format!("sync open: {name} +{} ms", self.0.elapsed().as_millis()));
+    }
+}
+
+/// Everything the view of a share that a linked device gets depends on, read at one moment ([`Inner::offered_with`]): the patterns
+/// that never sync, what is switched off (the kinds and items the person turned off, the private items, which the app sends as
+/// patterns), the photos held back, the waiting deletes (`again`, which change the view while they wait) and the deletes that
+/// stay on this device. What a device does not fetch (`only`, `never_fetch`) is its own and is applied to the mirror, not here.
+#[derive(Debug, Clone, Default)]
+struct ViewInputs {
+    skip: Vec<String>,
+    off: Vec<String>,
+    gate: Option<SendGate>,
+    again: HashSet<String>,
+    local_deletes: Vec<String>,
+}
+
+impl ViewInputs {
+    fn admits(&self, path: &str, e: &Entry) -> bool {
+        !excluded(&self.skip, path)
+            && !excluded(&self.off, path)
+            && !self.gate.as_ref().is_some_and(|g| g.holds_back(path))
+            && !(e.deleted && (self.again.contains(path) || excluded(&self.local_deletes, path)))
+    }
+
+    /// A hash of the inputs, each part sorted so the same inputs always give the same fingerprint.
+    fn fingerprint(&self) -> String {
+        let sorted = |v: &[String]| {
+            let mut v = v.to_vec();
+            v.sort();
+            v.dedup();
+            v
+        };
+        let gate = match &self.gate {
+            Some(g) => {
+                let mut v = vec![g.dir.trim_matches('/').to_string()];
+                v.extend(sorted(&g.allow));
+                v
+            }
+            None => Vec::new(),
+        };
+        let again: Vec<String> = self.again.iter().cloned().collect();
+        delta::fingerprint(&[
+            ("skip", sorted(&self.skip)),
+            ("off", sorted(&self.off)),
+            ("gate", gate),
+            ("again", sorted(&again)),
+            ("local_deletes", sorted(&self.local_deletes)),
+        ])
     }
 }
 
@@ -160,6 +225,11 @@ pub struct Config {
     /// Seconds between sync rounds (a change or Sync now starts one at once).
     #[serde(default)]
     pub interval_secs: Option<u64>,
+    /// Seconds between safety rounds: a device that answers summaries and is reached over Reticulum has no timer round (a notice,
+    /// being reachable again, or Sync now starts one), but is asked for a summary this often in case a notice was lost. Default
+    /// 900 (15 minutes).
+    #[serde(default)]
+    pub safety_secs: Option<u64>,
     /// Bind to this port (tests and fixed firewall rules); 0 or absent picks one.
     #[serde(default)]
     pub port: Option<u16>,
@@ -227,6 +297,40 @@ pub struct Config {
     /// system before it can close the engine; absent: no limit (the app's own engine).
     #[serde(default)]
     pub lifetime_secs: Option<u64>,
+    /// Run Reticulum beside iroh (Android, Linux and iOS; ignored elsewhere): `true`, `false`, or `"entries"`. Off unless asked: with no
+    /// `rns_interfaces`, it listens and finds devices on the local network (Wi-Fi auto) and connects to the entry points that
+    /// are on. `"entries"` is Reticulum with the entry points only and no Wi-Fi auto (what the background-sync service runs,
+    /// which holds no multicast lock).
+    #[serde(default)]
+    pub reticulum: Reticulum,
+    /// For tests: the Reticulum interfaces to use instead of Wi-Fi auto.
+    #[serde(default)]
+    pub rns_interfaces: Option<RnsInterfaces>,
+    /// What kind of device this is, as Nearby linking tells a device that asks: `"phone"`, `"tablet"` or `"computer"` (anything
+    /// else counts as not set).
+    #[serde(default)]
+    pub device_kind: Option<String>,
+    /// The shared folders of the big kinds, by share id (maps, libraries, ZIMs, models, videos): their files wait on a Medium link
+    /// whatever their size (design 2b). Default: the ids the app gives those kinds (`library`, `libraries`, `models`, `maps`,
+    /// `regions`, `videos`).
+    #[serde(default = "default_bulk")]
+    pub bulk: Vec<String>,
+    /// The page of differences asked for on a Medium link, in bytes (default 64 KB, about 3 s at the 20 KB/s floor).
+    #[serde(default)]
+    pub medium_page_bytes: Option<usize>,
+    /// Tests only: how long a Reticulum link may go without a measurement before the next request is preceded by a small one that
+    /// measures it, in ms (default 10 s).
+    #[serde(default)]
+    pub speed_probe_ms: Option<u64>,
+    /// How often the link of a device this device holds files back from is measured, in ms (default 5 s).
+    #[serde(default)]
+    pub resume_check_ms: Option<u64>,
+    /// How long a link must allow what was held back before a round for that device is started, in ms (default 30 s, design 2b).
+    #[serde(default)]
+    pub resume_hold_ms: Option<u64>,
+    /// The most that hold grows to after repeated slow cancels, in ms (default 10 min).
+    #[serde(default)]
+    pub resume_backoff_max_ms: Option<u64>,
     /// A second copy of the device's key, in a folder outside `dir` (Cache on Linux: `<data>/identity-keep`): written at every open,
     /// and the key comes back from it when the one in `dir` is missing or the wrong length (see [`identity::load`]). Absent on a
     /// phone, whose app keeps its own copy beside the install marker.
@@ -236,6 +340,75 @@ pub struct Config {
     /// the open then fails, and the app's own start restores the key or makes the new one.
     #[serde(default = "t")]
     pub make_identity: bool,
+}
+
+fn default_bulk() -> Vec<String> {
+    ["library", "libraries", "models", "maps", "regions", "videos"].into_iter().map(String::from).collect()
+}
+
+/// How much of Reticulum to run ([`Config::reticulum`]).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum Reticulum {
+    #[default]
+    Off,
+    /// With Wi-Fi auto (or the test block's interfaces) and the entry points.
+    On,
+    /// With the entry points only.
+    Entries,
+}
+
+impl<'de> Deserialize<'de> for Reticulum {
+    fn deserialize<D: serde::Deserializer<'de>>(d: D) -> std::result::Result<Self, D::Error> {
+        match Option::<Value>::deserialize(d)? {
+            None | Some(Value::Null) | Some(Value::Bool(false)) => Ok(Reticulum::Off),
+            Some(Value::Bool(true)) => Ok(Reticulum::On),
+            Some(Value::String(s)) if s == "entries" => Ok(Reticulum::Entries),
+            Some(_) => Err(serde::de::Error::custom("reticulum must be true, false or \"entries\"")),
+        }
+    }
+}
+
+/// The Reticulum interfaces a test asks for ([`Config::rns_interfaces`]).
+#[derive(Debug, Clone, Default, Deserialize)]
+pub struct RnsInterfaces {
+    /// Accept TCP connections on this address.
+    #[serde(default)]
+    pub tcp_listen: Option<String>,
+    /// Connect to a TCP listener at this address.
+    #[serde(default)]
+    pub tcp_connect: Option<String>,
+    /// Wi-Fi/LAN auto discovery as well.
+    #[serde(default)]
+    pub wifi: bool,
+    /// Test only: Nearby pairing announces go out on, and are listed from, TCP interfaces too (loopback has no Wi-Fi). Off in
+    /// production, where a pairing announce is only ever sent on local Wi-Fi/LAN interfaces.
+    #[serde(default)]
+    pub pair_local_tcp: bool,
+    /// Entry points to connect to besides those in `entry_points.json` (never saved there).
+    #[serde(default)]
+    pub entries: Vec<entries::EntryPoint>,
+}
+
+/// A linked device's Reticulum address, as saved in `sync.json` (absent for links with no Reticulum address yet, and in files
+/// saved by builds 48 to 54).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+struct RnsPeer {
+    /// The destination, 32 hex characters.
+    dest: String,
+}
+
+/// A device's Reticulum destination and its device key's signature over it (both hex): what a pairing and an index carry.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct RnsProof {
+    dest: String,
+    sig: String,
+}
+
+/// The Reticulum part of a link code.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct RnsCode {
+    /// The destination, 32 hex characters.
+    d: String,
 }
 
 /// Whether `rel` (a path in a shared folder) is one of `patterns` or inside one (see [`Config::exclude`]).
@@ -294,6 +467,9 @@ struct Peer {
     /// read the code, and in files saved by older versions.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     unconfirmed: bool,
+    /// Where the device is on Reticulum, once known (from its link code, its pairing or its file list).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    rns: Option<RnsPeer>,
 }
 
 /// The least time between two writes of a device's last seen time.
@@ -385,6 +561,63 @@ struct Saved {
     /// The links made before new links started Off have been given `"match"` ([`migrate_links`]); done once, never again.
     #[serde(default)]
     links_migrated: bool,
+    /// The devices this one has unlinked, signed, kept [`REMOVAL_KEEP_MS`] and offered to every linked device in its file list
+    /// ([`Removal`]). Absent in files saved by builds before this one.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    removals: Vec<Removal>,
+    /// The devices this one was linked with and no longer is (it unlinked them, or was told to, or the other device unlinked
+    /// this one), with when, kept [`REMOVAL_KEEP_MS`]. Over Reticulum a hello from one of them is answered "not linked"
+    /// ([`Transport::set_former`]), which is how it learns it was unlinked. Absent in files saved by builds before this one.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    former: Vec<Former>,
+}
+
+/// A device that used to be linked, and when it was dropped (ms since 1970).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct Former {
+    id: String,
+    t: u64,
+}
+
+/// How long an unlink is kept and offered to the other linked devices: 30 days.
+const REMOVAL_KEEP_MS: u64 = 30 * 24 * 60 * 60 * 1000;
+
+/// The start of what a Removal signs.
+const REMOVAL_PREFIX: &[u8] = b"cache remove v1";
+
+/// "`by` unlinked `target` at `t`", signed with `by`'s device key. A device that unlinks another hands this to the devices it is
+/// still linked with, in its file list, so they unlink it too. Older builds do not know the field and ignore it.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct Removal {
+    /// The unlinked device's id.
+    target: String,
+    /// The id of the device that unlinked it (and signed).
+    by: String,
+    /// When (ms since 1970, on `by`'s clock).
+    t: u64,
+    /// `by`'s signature over [`removal_message`], hex.
+    sig: String,
+}
+
+/// What a Removal's signature covers: the prefix, the target's id and the time (8 bytes, big endian).
+fn removal_message(target: &str, t: u64) -> Vec<u8> {
+    let mut m = REMOVAL_PREFIX.to_vec();
+    m.extend_from_slice(target.as_bytes());
+    m.extend_from_slice(&t.to_be_bytes());
+    m
+}
+
+fn sign_removal(key: &SecretKey, target: &str, t: u64) -> Removal {
+    let sig = data_encoding::HEXLOWER.encode(&key.sign(&removal_message(target, t)).to_bytes());
+    Removal { target: target.to_string(), by: key.public().to_string(), t, sig }
+}
+
+/// Whether `r.sig` is `r.by`'s signature over the removal.
+fn removal_checks_out(r: &Removal) -> bool {
+    let Ok(by) = r.by.parse::<PublicKey>() else { return false };
+    let Ok(bytes) = data_encoding::HEXLOWER.decode(r.sig.as_bytes()) else { return false };
+    let Ok(bytes) = <[u8; 64]>::try_from(bytes.as_slice()) else { return false };
+    by.verify(&removal_message(&r.target, r.t), &Signature::from_bytes(&bytes)).is_ok()
 }
 
 /// A link as it is made: Off, waiting for the person's answer (`ask`), until either device sets it. Its time is 0, so any
@@ -424,6 +657,10 @@ struct RemoteShare {
     id: String,
     name: String,
     index: Index,
+    /// The fingerprint of what decides the view of this folder the sender gives the device it sends this to
+    /// ([`ViewInputs::fingerprint`]); older versions do not say.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    fp: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -442,7 +679,107 @@ struct RemoteIndex {
     /// The sender holds secrets for the device it sends this to ([`secrets_digest`]); the device asks for them when it changes.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     secrets: Option<String>,
+    /// The sender's Reticulum destination and its device key's signature over it (older versions do not say), so a link made
+    /// before Reticulum learns where to reach the sender.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    rns: Option<RnsProof>,
+    /// The devices the sender has unlinked, signed by it, so this one unlinks them too (older versions do not say).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    removed: Vec<Removal>,
+    /// The sender answers the summary and differences requests ([`Delta`]); older versions do not say. A summary is this same
+    /// structure with no entries in its shares (only each share's id, name, epoch, counter and fingerprint).
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    summary: bool,
+    /// In a summary: the file the sender is fetching right now (from this device or another): the shared folder's id and how far it
+    /// has got, no path. It is how a device that only sends sees a transfer to the other one (older versions do not say).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    fetching: Option<Fetching>,
+    /// A hash of the sender's entry points, removals included ([`entries::version`]); the device that sees another one than its own
+    /// asks for the list (`cache.entries`). Older versions do not say, and are not asked.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    entries_v: Option<String>,
 }
+
+/// What a device says of the file it is fetching at the moment: no path, only the folder and the progress.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+struct Fetching {
+    share: String,
+    size: u64,
+    done: u64,
+}
+
+/// What a device last served of one file to a linked device that fetches it from this one ([`Inner::serving`]).
+#[derive(Debug, Clone)]
+struct Serving {
+    hash: String,
+    /// The folder holding the file, and its size there; none when no folder of this device lists the hash.
+    share: Option<String>,
+    size: u64,
+    /// The highest byte offset a window served reached.
+    high: u64,
+    at: Instant,
+}
+
+/// What the status says an item that a link's class holds back is waiting for.
+const WAITING_FOR_FASTER: &str = "Waiting for a faster connection";
+/// What the status says a file waits for when the entry point its device is reached through takes no file that big (its cap).
+const WAITING_FOR_WIFI: &str = "Bigger files wait for Wi-Fi";
+
+/// An item the link's class does not allow now: a file too big for it (or of a big kind), or a folder's whole list. Not a
+/// failure: it stays wanted and goes when the link allows it.
+#[derive(Debug)]
+struct Waiting;
+
+impl std::fmt::Display for Waiting {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(WAITING_FOR_FASTER)
+    }
+}
+
+impl std::error::Error for Waiting {}
+
+/// A file bigger than the cap of the entry point its device is reached through: like [`Waiting`], not a failure; it goes when the
+/// route is no longer through a capped entry (Wi-Fi is back, another way is up) or the cap is raised.
+#[derive(Debug)]
+struct WaitingCap;
+
+impl std::fmt::Display for WaitingCap {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(WAITING_FOR_WIFI)
+    }
+}
+
+impl std::error::Error for WaitingCap {}
+
+fn is_waiting(e: &anyhow::Error) -> bool {
+    e.chain().any(|c| c.downcast_ref::<Waiting>().is_some() || c.downcast_ref::<WaitingCap>().is_some())
+}
+
+fn is_waiting_cap(e: &anyhow::Error) -> bool {
+    e.chain().any(|c| c.downcast_ref::<WaitingCap>().is_some())
+}
+
+/// A held back item as the status lists it: (device, folder id, path; empty for a folder's whole list).
+type WaitKey = (String, String, String);
+
+/// How long a link must allow what is held back before a retry, after `cancels` slow cancels in a row: the base, doubled for each
+/// one, up to `cap`.
+fn backoff_hold(base: Duration, cancels: u32, cap: Duration) -> Duration {
+    base.saturating_mul(1u32.checked_shl(cancels).unwrap_or(u32::MAX)).min(cap)
+}
+
+/// A device that is served windows is "fetching from this one" until this long after the last window.
+const SERVING_FOR: Duration = Duration::from_secs(10);
+/// What a summary says of the other device's fetch is a look at one moment, so it is shown only this long after that look (or
+/// twice the interval, when that is shorter): a fetch that stopped since (it ended, failed or was cancelled) is not kept on show
+/// until the next look, which can be hours away.
+const SUMMARY_FETCHING_FOR: Duration = Duration::from_secs(20);
+/// The key in the notice queues for "this device's entry points changed" (not a folder's id: those are never empty or start with NUL).
+const ENTRIES_NOTICE: &str = "\u{0}entries";
+/// Notices to one device are sent at most this often (a burst of writes makes one, with the latest counter).
+const NOTICE_EVERY: Duration = Duration::from_millis(800);
+/// A device heard reachable again is asked this long after: a round at that very instant can ask before the link can be made.
+const REACHABLE_DELAY: Duration = Duration::from_secs(2);
 
 /// What one round covers: everything (the rounds on their own, and `sync_now` with no scope), or, for `sync_now` with a scope,
 /// one linked device, some shared folders, and within them the paths `paths` covers (patterns as for [`Config::exclude`]).
@@ -451,11 +788,13 @@ struct Scope {
     peer: Option<String>,
     shares: Option<Vec<String>>,
     paths: Option<Vec<String>>,
+    /// The rounds of the loop between Sync nows: only these devices (those that are due), the rest left alone.
+    peers: Option<Vec<String>>,
 }
 
 impl Scope {
     fn whole(&self) -> bool {
-        self.peer.is_none() && self.shares.is_none() && self.paths.is_none()
+        self.peer.is_none() && self.shares.is_none() && self.paths.is_none() && self.peers.is_none()
     }
 
     fn has_share(&self, id: &str) -> bool {
@@ -463,14 +802,19 @@ impl Scope {
     }
 
     fn has_peer(&self, id: &str) -> bool {
-        self.peer.as_deref().map(|p| p == id).unwrap_or(true)
+        self.peer.as_deref().map(|p| p == id).unwrap_or(true) && self.peers.as_ref().map(|l| l.iter().any(|p| p == id)).unwrap_or(true)
+    }
+
+    /// A round of the loop that asked at least one device counts as a round; one that only rescanned does not.
+    fn counts(&self) -> bool {
+        self.whole() || (self.peer.is_none() && self.shares.is_none() && self.paths.is_none() && self.peers.as_ref().is_some_and(|l| !l.is_empty()))
     }
 
     /// `remote` narrowed to the paths of the scope.
     fn narrow(&self, remote: &Index) -> Index {
         match &self.paths {
             None => remote.clone(),
-            Some(p) => Index { files: remote.files.iter().filter(|(rel, _)| excluded(p, rel)).map(|(k, v)| (k.clone(), v.clone())).collect() },
+            Some(p) => Index { files: remote.files.iter().filter(|(rel, _)| excluded(p, rel)).map(|(k, v)| (k.clone(), v.clone())).collect(), ..Index::default() },
         }
     }
 }
@@ -485,6 +829,8 @@ struct PeerState {
 
 #[derive(Debug, Clone, Serialize)]
 struct Transfer {
+    /// The shared folder's id (`share` is its name).
+    share_id: String,
     share: String,
     path: String,
     size: u64,
@@ -614,8 +960,14 @@ struct Inner {
     /// Devices whose Gate refused the last check-in with 403 "not linked", and when the first of those was (see
     /// [`Inner::refused_by`]). In memory only: a restart starts the count again, which can only keep a link longer.
     refused: Mutex<HashMap<String, Instant>>,
+    /// The unlinks refused as older than their link (target, by, time), so the line is said once ([`Inner::apply_removals`]).
+    refused_removals: Mutex<std::collections::HashSet<(String, String, u64)>>,
     /// The code being shown, and until when.
     pairing: Mutex<Option<(String, Instant)>>,
+    /// The short code being shown (only one code is live at a time: showing one ends the other kind).
+    short: Mutex<Option<ShortCode>>,
+    /// Tests only: how far the short code's clock is moved on.
+    code_skew_ms: AtomicU64,
     run: Mutex<Run>,
     /// Hashes being fetched or about to be: kept from garbage collection so an interrupted transfer resumes.
     wanted: Arc<Mutex<HashSet<Hash>>>,
@@ -624,6 +976,9 @@ struct Inner {
     /// soon, but at most once per interval per device (two idle devices asking each other must not keep each other awake).
     every: Duration,
     asked_at: Mutex<HashMap<String, Instant>>,
+    /// Per device: the files (share id, path) a round wanted from it and could not get whole. While any is left the device is not
+    /// quiet ([`Inner::quiet_peer`]): the timer round retries them.
+    held_from: Mutex<HashMap<String, HashSet<(String, String)>>>,
     network: AtomicBool,
     reserve: AtomicU64,
     round: tokio::sync::Mutex<()>,
@@ -662,9 +1017,82 @@ struct Inner {
     /// Secrets for one linked device each (the app's API keys the person ticked for it), by device: in memory only, never
     /// written anywhere by the engine, and sent only to that device over its own end-to-end encrypted connection when it asks.
     secrets: Mutex<HashMap<String, BTreeMap<String, String>>>,
+    /// [`Config::device_kind`], when valid.
+    device_kind: Option<String>,
     /// The secrets each linked device last sent here, by device: their digest (so they are asked for once per change) and,
     /// until the app takes them (`take_secrets`), the secrets themselves. In memory only.
     received: Mutex<HashMap<String, Received>>,
+    /// Linked devices whose file list said they answer summaries and differences ([`RemoteIndex::summary`]); in memory only
+    /// (a saved mirror also says so, see [`Inner::peer_has_summary`]).
+    summary_peers: Mutex<HashSet<String>>,
+    /// This device's entry points (the rnsds the person entered) and the removals still remembered: `entry_points.json`.
+    entries: Mutex<Vec<entries::Record>>,
+    /// Entry points the test block gave, always on the node beside the list (never saved).
+    extra_entries: Vec<entries::EntryPoint>,
+    /// The `entries_v` each linked device had when its list was last taken, so a list is not asked for twice.
+    entries_seen: Mutex<HashMap<String, String>>,
+    /// How many times another device has been asked for its entry points: for the tests.
+    asked_entries: AtomicU64,
+    /// How many summary, differences and whole-list requests this device has made: for the tests.
+    asked_summary: AtomicU64,
+    asked_diff: AtomicU64,
+    asked_full: AtomicU64,
+    /// Step 3 part 2. How often a device that answers summaries and is reached over Reticulum is asked for a summary when nothing
+    /// else asked (the safety round).
+    safety: Duration,
+    /// Linked devices a round is due with (a notice came, or they are reachable again), and the wake that says so.
+    due: Mutex<HashSet<String>>,
+    wake_due: Notify,
+    /// Why each due device is due, for the line a round says ("notice from <name>"); and why the loop was woken for a whole round
+    /// (the first cause that woke it since it last ran).
+    due_why: Mutex<HashMap<String, String>>,
+    wake_why: Mutex<Option<String>>,
+    /// When each linked device was last asked in a round (the safety round counts from it).
+    last_contact: Mutex<HashMap<String, Instant>>,
+    /// Folders whose counter or epoch moved and whose linked devices have not been told yet, and the wake that says so.
+    notice_dirty: Mutex<HashSet<String>>,
+    notice_wake: Notify,
+    /// Per linked device, the folders a notice is waiting to be sent for, and whether a task is sending to it now.
+    notice_out: Mutex<HashMap<String, (HashSet<String>, bool)>>,
+    notice_sent: AtomicU64,
+    notice_got: AtomicU64,
+    /// Small files taken from a device's page of differences, and ones whose bytes did not match the entry's hash.
+    inline_ok: AtomicU64,
+    inline_bad: AtomicU64,
+    /// What each linked device is being served from this device's files (the windows it asks for), by device.
+    serving: Mutex<HashMap<String, Serving>>,
+    /// Linked devices that have asked this device something since it started: they can reach it, so they can send it notices.
+    /// (A device only this one can reach has to be polled, as before.)
+    heard_from: Mutex<HashSet<String>>,
+    /// Linked devices heard reachable again, and when a round with each becomes due ([`REACHABLE_DELAY`]).
+    reach_pending: Mutex<HashMap<String, Instant>>,
+    /// [`Config::resume_check_ms`] and [`Config::resume_hold_ms`].
+    resume_check: Duration,
+    resume_hold: Duration,
+    /// Per device: since when its link has allowed what was held back from it.
+    resume_since: Mutex<HashMap<String, Instant>>,
+    /// [`Config::resume_backoff_max_ms`].
+    resume_cap: Duration,
+    /// Per device: how many retries the watcher started ended as a slow cancel, one after the other (the hold doubles for each).
+    resume_cancels: Mutex<HashMap<String, u32>>,
+    /// Devices the watcher started a round for whose result is not known yet: the next item of one that goes back to waiting is a
+    /// slow cancel.
+    resume_trial: Mutex<HashSet<String>>,
+    /// Per device: the node's interface count of changes when the watcher last looked.
+    resume_gen: Mutex<HashMap<String, u64>>,
+    /// Tests only: when (ms since 1970) a round was started by the resume watcher.
+    #[cfg(feature = "test-hooks")]
+    resume_fires: Mutex<Vec<(u64, &'static str, u32)>>,
+    /// What each link's class holds back now, per item ([`WaitKey`]) and its size. Kept in step with `held_from`.
+    waiting: Mutex<BTreeMap<WaitKey, u64>>,
+    /// The files of `waiting` that wait for an entry point's cap (their reason is [`WAITING_FOR_WIFI`], not the link's speed).
+    waiting_cap: Mutex<BTreeSet<WaitKey>>,
+    /// Windows this device refused because the file was bigger than the cap of the entry point the asker came in through.
+    refused_cap: AtomicU64,
+    /// [`Config::bulk`].
+    bulk: HashSet<String>,
+    /// [`Config::medium_page_bytes`].
+    medium_page: usize,
     /// The one-time move of an older store into the new one has finished (or there was none); rounds wait for it.
     store_ready: AtomicBool,
     /// While that move runs: bytes done and bytes in all.
@@ -712,6 +1140,9 @@ struct LinkCode {
     a: EndpointAddr,
     t: String,
     n: String,
+    /// The Reticulum destination (absent from codes of builds before 55, which ignore it when it is there).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    r: Option<RnsCode>,
 }
 
 const CODE_PREFIX: &str = "CACHE1-";
@@ -759,6 +1190,78 @@ pub fn error_kind(e: &anyhow::Error) -> Option<&'static str> {
     e.downcast_ref::<LinkCodeError>().map(LinkCodeError::kind)
 }
 
+/// What a link code holds: an old `CACHE1-` code (the other device's iroh address, a token and its name), or a short one (its
+/// Reticulum destination and a one-time secret).
+#[derive(Debug)]
+enum Code {
+    Old(LinkCode),
+    Short { dest: [u8; 16], secret: [u8; 5] },
+}
+
+/// The short code's prefix, and how long its base32 body is (21 bytes: the 16 byte destination, the 5 byte secret).
+const SHORT_PREFIX: &str = "CACHE";
+const SHORT_LEN: usize = 34;
+
+/// `CACHE-` then base32 of the destination and the secret, in groups of four.
+fn encode_short(dest: &[u8; 16], secret: &[u8; 5]) -> String {
+    let mut raw = dest.to_vec();
+    raw.extend_from_slice(secret);
+    let body = data_encoding::BASE32_NOPAD.encode(&raw);
+    let groups: Vec<&str> = body.as_bytes().chunks(4).map(|c| std::str::from_utf8(c).unwrap_or("")).collect();
+    format!("{SHORT_PREFIX}-{}", groups.join("-"))
+}
+
+/// Reads either kind of code. Case, spaces and dashes do not matter; the short prefix may come with or without its dash.
+fn decode_any(s: &str) -> Result<Code> {
+    let s: String = s.trim().chars().filter(|c| !c.is_whitespace()).collect::<String>().to_uppercase();
+    if s.starts_with(CODE_PREFIX) || made_by_newer(&s) {
+        return Ok(Code::Old(decode_code(&s)?));
+    }
+    let Some(rest) = s.strip_prefix(SHORT_PREFIX) else { return Err(LinkCodeError::NotACode.into()) };
+    let body: String = rest.chars().filter(|c| *c != '-').collect();
+    if body.len() != SHORT_LEN {
+        return Err(LinkCodeError::NotACode.into());
+    }
+    let raw = data_encoding::BASE32_NOPAD.decode(body.as_bytes()).map_err(|_| LinkCodeError::NotACode)?;
+    let (Ok(dest), Ok(secret)) = (<[u8; 16]>::try_from(&raw[..16]), <[u8; 5]>::try_from(&raw[16..])) else {
+        return Err(LinkCodeError::NotACode.into());
+    };
+    Ok(Code::Short { dest, secret })
+}
+
+/// Equal bytes, taking the same time whatever they hold.
+fn ct_eq(a: &[u8], b: &[u8]) -> bool {
+    a.len() == b.len() && a.iter().zip(b).fold(0u8, |d, (x, y)| d | (x ^ y)) == 0
+}
+
+/// The short code being shown: its secret, until when, and how many wrong secrets it has met.
+struct ShortCode {
+    secret: [u8; 5],
+    expires_ms: u64,
+    strikes: u8,
+}
+
+/// Wrong secrets a short code takes before it is burned.
+const SHORT_STRIKES: u8 = 3;
+
+/// A short code's pairing request.
+#[derive(Serialize, Deserialize)]
+struct ShortPair {
+    /// The one-time secret, base32.
+    secret: String,
+    hello: ShortHello,
+}
+
+/// What each side tells the other in a short code's pairing: who it is, where iroh finds it, and its Reticulum destination.
+#[derive(Serialize, Deserialize)]
+struct ShortHello {
+    key: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    iroh: Option<EndpointAddr>,
+    name: String,
+    rns: RnsProof,
+}
+
 fn decode_code(s: &str) -> Result<LinkCode> {
     let s: String = s.trim().chars().filter(|c| !c.is_whitespace()).collect::<String>().to_uppercase();
     let Some(body) = s.strip_prefix(CODE_PREFIX) else {
@@ -773,6 +1276,22 @@ fn made_by_newer(s: &str) -> bool {
     let Some(rest) = s.strip_prefix("CACHE") else { return false };
     let Some((n, _)) = rest.split_once('-') else { return false };
     !n.is_empty() && n.bytes().all(|b| b.is_ascii_digit()) && n.parse::<u64>().map_or(true, |n| n > 1)
+}
+
+/// A Reticulum destination (32 hex characters) as bytes.
+fn rns_dest_bytes(hex: &str) -> Option<[u8; 16]> {
+    if hex.len() != 32 || !hex.is_ascii() {
+        return None;
+    }
+    let mut out = [0u8; 16];
+    for (i, b) in out.iter_mut().enumerate() {
+        *b = u8::from_str_radix(&hex[2 * i..2 * i + 2], 16).ok()?;
+    }
+    Some(out)
+}
+
+fn dest_hex_of(d: &[u8; 16]) -> String {
+    d.iter().map(|b| format!("{b:02x}")).collect()
 }
 
 fn token() -> String {
@@ -1023,7 +1542,7 @@ impl Inner {
         if skip.is_empty() {
             return idx.clone();
         }
-        Index { files: idx.files.iter().filter(|(p, _)| !excluded(skip, p)).map(|(p, e)| (p.clone(), e.clone())).collect() }
+        Index { files: idx.files.iter().filter(|(p, _)| !excluded(skip, p)).map(|(p, e)| (p.clone(), e.clone())).collect(), ..Index::default() }
     }
 
     /// A deletion of `rel` in `share` stays on this device ([`Config::local_deletes`]).
@@ -1053,6 +1572,7 @@ impl Inner {
                 .filter(|(p, e)| !excluded(skip, p) && self.wants(share, p) && !(e.deleted && self.delete_stays_here(share, p)))
                 .map(|(p, e)| (p.clone(), e.clone()))
                 .collect(),
+            ..Index::default()
         }
     }
 
@@ -1062,20 +1582,28 @@ impl Inner {
     /// the other devices never take it meanwhile. The waiting deletes are read before the index: a rescan stores the index
     /// without them first and only then stops holding them back, so whichever index is read here, a delete in it that is
     /// waiting to be forgotten is in `again`.
-    fn offered(&self, share: &str) -> Index {
-        let skip = self.skip(share);
-        let off = self.off.lock().unwrap().get(share).cloned().unwrap_or_default();
-        let gate = self.send_gate.lock().unwrap().get(share).cloned();
-        let again: HashSet<String> = self.refetch.lock().unwrap().get(share).map(|v| v.iter().cloned().collect()).unwrap_or_default();
-        let idx = self.load_index(share);
-        Index {
-            files: idx
-                .files
-                .iter()
-                .filter(|(p, e)| !excluded(skip, p) && !excluded(&off, p) && !gate.as_ref().is_some_and(|g| g.holds_back(p)) && !(e.deleted && (again.contains(*p) || self.delete_stays_here(share, p))))
-                .map(|(p, e)| (p.clone(), e.clone()))
-                .collect(),
+    /// Everything that decides what this device offers of `share`, read once (the waiting deletes first, see [`Inner::offered_with`]).
+    fn view_inputs(&self, share: &str) -> ViewInputs {
+        ViewInputs {
+            skip: self.skip(share).to_vec(),
+            off: self.off.lock().unwrap().get(share).cloned().unwrap_or_default(),
+            gate: self.send_gate.lock().unwrap().get(share).cloned(),
+            again: self.refetch.lock().unwrap().get(share).map(|v| v.iter().cloned().collect()).unwrap_or_default(),
+            local_deletes: self.local_deletes.get(share).cloned().unwrap_or_default(),
         }
+    }
+
+    /// [`Inner::offered_with`], and the fingerprint of the inputs it was made with. The index carries the epoch and counter it was
+    /// read at.
+    fn offered_with(&self, share: &str) -> (Index, String) {
+        let inputs = self.view_inputs(share);
+        let idx = self.load_index(share);
+        let view = Index {
+            files: idx.files.iter().filter(|(p, e)| inputs.admits(p, e)).map(|(p, e)| (p.clone(), e.clone())).collect(),
+            epoch: idx.epoch.clone(),
+            counter: idx.counter,
+        };
+        (view, inputs.fingerprint())
     }
 
     fn load_index(&self, share: &str) -> Index {
@@ -1086,9 +1614,19 @@ impl Inner {
         read_json(&self.seen_path(share)).unwrap_or_default()
     }
 
+    /// The only writer of the index, and so the one place that counts changes: every entry that differs from the saved one
+    /// takes the folder's next counter, and an entry gone from the index starts a new epoch ([`delta::stamp`]).
     fn store_index(&self, share: &str, idx: &Index, seen: &Seen) -> Result<()> {
-        write_json(&self.index_path(share), idx)?;
-        write_json(&self.seen_path(share), seen)
+        let old = self.load_index(share);
+        let stamped = delta::stamp(&old, idx);
+        write_json(&self.index_path(share), &stamped)?;
+        write_json(&self.seen_path(share), seen)?;
+        if (stamped.epoch.as_str(), stamped.counter) != (old.epoch.as_str(), old.counter) {
+            // Never blocks or fails the write: the linked devices are told by a task of their own.
+            self.notice_dirty.lock().unwrap().insert(share.to_string());
+            self.notice_wake.notify_one();
+        }
+        Ok(())
     }
 
     fn writes_path(&self, share: &str) -> PathBuf {
@@ -1316,7 +1854,7 @@ impl Inner {
                 refetched = true;
             }
         }
-        // Stored at once, and only then no longer held back from what is offered ([`Inner::offered`]): until the index without
+        // Stored at once, and only then no longer held back from what is offered ([`Inner::offered_with`]): until the index without
         // them is on disk, an answer to another device reads the one with them, and must still leave them out.
         if refetched {
             self.store_index(&share.id, &idx, &seen)?;
@@ -1420,7 +1958,7 @@ impl Inner {
                     }
                     Some(old.next(&self.me, now_ms(), hash, m.len(), false))
                 }
-                None => Some(Entry { hash, size: m.len(), deleted: false, ver: Ver { at: now_ms(), by: self.me.clone() }, hist: vec![] }),
+                None => Some(Entry { hash, size: m.len(), deleted: false, ver: Ver { at: now_ms(), by: self.me.clone() }, hist: vec![], ctr: 0 }),
             };
             if let Some(e) = entry {
                 idx.files.insert(rel.clone(), e);
@@ -1486,22 +2024,646 @@ impl Inner {
     /// This device's file list as `peer` gets it: only the shares kept with it ([`Config::with`]), with this device's copy of
     /// their link and whether there are secrets for it.
     fn our_index_for(&self, peer: &str) -> RemoteIndex {
+        self.index_for(peer, true)
+    }
+
+    /// [`Inner::our_index_for`] (`full`), or its summary: the same, with the shares carrying no entries, only their epoch,
+    /// counter and fingerprint.
+    fn index_for(&self, peer: &str, full: bool) -> RemoteIndex {
         let s = self.saved.lock().unwrap().clone();
         let link = s.peers.iter().find(|p| p.id == peer).and_then(|p| p.link.clone());
         let secrets = self.secrets.lock().unwrap().get(peer).filter(|m| !m.is_empty()).map(secrets_digest);
-        RemoteIndex {
+        let mut out = RemoteIndex {
             free_bytes: Self::free_bytes(&self.dir),
             name: s.name.clone(),
             shares: s
                 .shares
                 .iter()
                 .filter(|sh| self.shares_with(&sh.id, peer))
-                .map(|sh| RemoteShare { id: sh.id.clone(), name: sh.name.clone(), index: self.offered(&sh.id) })
+                .map(|sh| {
+                    let (index, fp) = if full {
+                        self.offered_with(&sh.id)
+                    } else {
+                        let idx = self.load_index(&sh.id);
+                        (Index { epoch: idx.epoch, counter: idx.counter, ..Index::default() }, self.view_inputs(&sh.id).fingerprint())
+                    };
+                    RemoteShare { id: sh.id.clone(), name: sh.name.clone(), index, fp: Some(fp) }
+                })
                 .collect(),
             link,
             links: true,
             secrets,
+            rns: self.rns_info().map(|(dest, sig)| RnsProof { dest, sig }),
+            removed: self.removals_to_offer(&s),
+            summary: true,
+            fetching: None,
+            entries_v: Some(self.entries_version()),
+        };
+        if !full {
+            out.fetching = self.run.lock().unwrap().transfer.as_ref().map(|t| Fetching { share: t.share_id.clone(), size: t.size, done: t.done });
+            #[cfg(feature = "test-hooks")]
+            if self.dir.join("no-summary-fetching").exists() {
+                out.fetching = None;
+            }
         }
+        #[cfg(feature = "test-hooks")]
+        if self.dir.join("no-entries-v").exists() {
+            // Acts as a build from before entry points.
+            out.entries_v = None;
+        }
+        #[cfg(feature = "test-hooks")]
+        if self.dir.join("no-summary").exists() {
+            // Acts as an older build: no counters, no fingerprints, and it does not say it answers summaries.
+            out.summary = false;
+            for sh in &mut out.shares {
+                sh.fp = None;
+                sh.index.epoch.clear();
+                sh.index.counter = 0;
+                for e in sh.index.files.values_mut() {
+                    e.ctr = 0;
+                }
+            }
+        }
+        out
+    }
+
+    /// The answer to a request for differences from `peer` ([`delta::DiffAsk`]): a page, or "full" when it cannot follow.
+    fn diff_answer(&self, peer: &str, body: &[u8]) -> Vec<u8> {
+        let full = || serde_json::to_vec(&delta::Page { full: true, ..delta::Page::default() }).unwrap_or_default();
+        let Ok(ask) = serde_json::from_slice::<delta::DiffAsk>(body) else { return full() };
+        if !self.shares_with(&ask.share, peer) || !self.saved.lock().unwrap().shares.iter().any(|x| x.id == ask.share) {
+            return full();
+        }
+        let inputs = self.view_inputs(&ask.share);
+        // Another filter than the one the asking device was told: it asks for the whole list.
+        if inputs.fingerprint() != ask.fp {
+            return full();
+        }
+        #[allow(unused_mut)]
+        let mut cap = delta::PAGE_BYTES;
+        #[cfg(feature = "test-hooks")]
+        if let Some(n) = std::fs::read_to_string(self.dir.join("diff-page-bytes")).ok().and_then(|t| t.trim().parse::<usize>().ok()) {
+            cap = n;
+        }
+        // The asker may ask for less than the class carries (the answering end's cap is put in `max` before it gets here).
+        if let Some(m) = ask.max {
+            cap = cap.min(m.max(1));
+        }
+        // A Slow asker gets the bytes of its small files (8 KB or less) with their entries; they come from this device's own store.
+        let store = self.store.raw().clone();
+        #[cfg(feature = "test-hooks")]
+        let corrupt = self.dir.join("corrupt-inline").exists();
+        let inline = |_: &str, e: &Entry| -> Option<Vec<u8>> {
+            if !ask.inl {
+                return None;
+            }
+            let hash: Hash = e.hash.parse().ok()?;
+            #[allow(unused_mut)]
+            let mut bytes = store.get_bytes(&hash).ok().filter(|b| b.len() as u64 == e.size)?;
+            #[cfg(feature = "test-hooks")]
+            if corrupt {
+                // Acts as a build that sends wrong bytes: one byte flipped.
+                if let Some(b) = bytes.first_mut() {
+                    *b ^= 0xff;
+                }
+            }
+            Some(bytes)
+        };
+        let page = delta::diff_page_with(&self.load_index(&ask.share), &ask.epoch, ask.c, ask.p.as_deref(), &|p, e| inputs.admits(p, e), cap, &inline);
+        serde_json::to_vec(&page).unwrap_or_default()
+    }
+
+    fn mirror_path(&self, peer: &str, share: &str) -> PathBuf {
+        let clean = |s: &str| s.chars().map(|c| if c.is_ascii_alphanumeric() || c == '_' { c } else { '_' }).collect::<String>();
+        self.dir.join("mirror").join(format!("{}-{}.json", clean(peer), clean(share)))
+    }
+
+    fn load_mirror(&self, peer: &str, share: &str) -> Option<delta::Mirror> {
+        read_json(&self.mirror_path(peer, share))
+    }
+
+    /// The saved mirror files of `peer`, except those of the shares in `keep`.
+    fn mirror_files(&self, peer: &str, keep: &[String]) -> Vec<PathBuf> {
+        let prefix = self.mirror_path(peer, "").file_name().and_then(|n| n.to_str()).map(|n| n.trim_end_matches(".json").to_string()).unwrap_or_default();
+        let Ok(rd) = std::fs::read_dir(self.dir.join("mirror")) else { return Vec::new() };
+        rd.flatten()
+            .map(|e| e.path())
+            .filter(|p| p.extension().is_some_and(|x| x == "json") && p.file_name().and_then(|n| n.to_str()).is_some_and(|n| n.starts_with(&prefix)))
+            .filter(|p| !keep.iter().any(|k| *p == self.mirror_path(peer, k)))
+            .collect()
+    }
+
+    /// Whether `peer` is known to answer summaries: its file list said so, or a mirror of it was saved.
+    fn peer_has_summary(&self, peer: &str) -> bool {
+        self.summary_peers.lock().unwrap().contains(peer) || !self.mirror_files(peer, &[]).is_empty()
+    }
+
+    /// Whether `peer` needs no timer round: it answers summaries, was last reached over Reticulum (so it sends notices and is
+    /// found again when reachable), and its last round was good. Any other device keeps today's round every interval.
+    fn quiet_peer(&self, peer: &str) -> bool {
+        if !self.peer_has_summary(peer) || !self.net.reached_over_rns(peer) || !self.heard_from.lock().unwrap().contains(peer) {
+            return false;
+        }
+        if self.held_from.lock().unwrap().get(peer).is_some_and(|s| !s.is_empty()) {
+            // Still has files to get from it: the timer round retries them until a round leaves nothing held.
+            return false;
+        }
+        self.run.lock().unwrap().peers.get(peer).is_some_and(|s| s.error.is_none() && s.last_seen.is_some())
+    }
+
+    /// A device that asked for our list may have changes too, so a round comes soon, at most once per interval per device. Not for
+    /// a [`Inner::quiet_peer`]: its notice replaces this. Whether a round was woken.
+    fn asked_wakes(&self, peer: &str) -> bool {
+        if self.quiet_peer(peer) {
+            return false;
+        }
+        let now = Instant::now();
+        let mut at = self.asked_at.lock().unwrap();
+        if at.get(peer).is_none_or(|t| now.duration_since(*t) >= self.every) {
+            at.insert(peer.to_string(), now);
+            drop(at);
+            self.wake_for(&format!("asked by {}", self.peer_name(peer)));
+            true
+        } else {
+            false
+        }
+    }
+
+    /// A round with `peer` is due (a notice from it came, or it is reachable again).
+    fn make_due(&self, peer: &str) {
+        self.due.lock().unwrap().insert(peer.to_string());
+        self.due_why.lock().unwrap().entry(peer.to_string()).or_insert_with(|| format!("notice from {}", self.peer_name(peer)));
+        self.wake_due.notify_one();
+    }
+
+    /// A shared folder's name for the log (its id when no name is known).
+    fn share_name(&self, id: &str) -> String {
+        if let Some(s) = self.saved.lock().unwrap().shares.iter().find(|s| s.id == id) {
+            return s.name.clone();
+        }
+        self.run.lock().unwrap().peers.values().filter_map(|p| p.index.as_ref()).flat_map(|i| i.shares.iter()).find(|x| x.id == id).map(|x| x.name.clone()).unwrap_or_else(|| id.to_string())
+    }
+
+    /// Wakes the loop for a whole round, remembering the first cause that did so (it is said when the round runs).
+    fn wake_for(&self, why: &str) {
+        self.wake_why.lock().unwrap().get_or_insert_with(|| why.to_string());
+        self.wake.notify_one();
+    }
+
+    /// Says why a round that asks `n` devices runs (nothing when it asks none: a loop tick that only rescans is silent).
+    fn say_round(&self, causes: &[String], n: usize) {
+        if n == 0 || !self.network.load(Ordering::Relaxed) {
+            return;
+        }
+        let mut list: Vec<&str> = Vec::new();
+        for c in causes {
+            if !list.contains(&c.as_str()) {
+                list.push(c);
+            }
+        }
+        say(&format!("sync round: {} ({n} device{})", list.join(", "), if n == 1 { "" } else { "s" }));
+    }
+
+    /// What the loop's next round covers when no one asked for a round: the devices that are due, the quiet ones not asked for a
+    /// safety interval, and every other device not asked for an interval. All of them: a whole round, as before.
+    fn loop_scope(&self) -> (Scope, Vec<String>, usize) {
+        let ids: Vec<String> = self.saved.lock().unwrap().peers.iter().map(|p| p.id.clone()).collect();
+        let mut due = std::mem::take(&mut *self.due.lock().unwrap());
+        let mut why = std::mem::take(&mut *self.due_why.lock().unwrap());
+        let now = Instant::now();
+        self.reach_pending.lock().unwrap().retain(|p, t| {
+            if *t <= now {
+                due.insert(p.clone());
+                why.entry(p.clone()).or_insert_with(|| format!("{} reachable again", self.peer_name(p)));
+                false
+            } else {
+                true
+            }
+        });
+        let list: Vec<String> = ids
+            .iter()
+            .filter(|id| {
+                let since = self.last_contact.lock().unwrap().get(*id).map(|t| now.duration_since(*t));
+                due.contains(*id) || since.is_none_or(|d| d >= if self.quiet_peer(id) { self.safety } else { self.every })
+            })
+            .cloned()
+            .collect();
+        let causes: Vec<String> = list
+            .iter()
+            .map(|id| {
+                why.get(id).cloned().unwrap_or_else(|| if self.quiet_peer(id) { "safety round".to_string() } else { "timer".to_string() })
+            })
+            .collect();
+        let n = list.len();
+        if n == ids.len() {
+            (Scope::default(), causes, n)
+        } else {
+            (Scope { peers: Some(list), ..Scope::default() }, causes, n)
+        }
+    }
+
+    /// How long until a quiet device is next due its safety round (the loop wakes for it).
+    fn next_safety_in(&self) -> Option<Duration> {
+        if !self.network.load(Ordering::Relaxed) {
+            return None;
+        }
+        let now = Instant::now();
+        let pending = self.reach_pending.lock().unwrap().values().map(|t| t.saturating_duration_since(now)).min();
+        let ids: Vec<String> = self.saved.lock().unwrap().peers.iter().map(|p| p.id.clone()).collect();
+        let safety = ids
+            .iter()
+            .filter(|id| self.quiet_peer(id))
+            .filter_map(|id| self.last_contact.lock().unwrap().get(id).map(|t| (*t + self.safety).saturating_duration_since(now)))
+            .min();
+        [pending, safety].into_iter().flatten().min().map(|d| d.max(Duration::from_millis(500)))
+    }
+
+    /// Watches the devices this device holds files or lists back from because their link was too slow (design 2b, "It speeds up"):
+    /// each is measured every few seconds, and when its class allows what waits, a round for it is started at once if a new link
+    /// came up, or once the class has allowed it for 30 seconds. The rate cannot be measured while nothing flows, so the round
+    /// that follows is the measurement: a link that is not fast after all gives the item back to waiting.
+    async fn resume_loop(self: Arc<Self>) {
+        loop {
+            tokio::time::sleep(self.resume_check).await;
+            if self.stop.load(Ordering::Relaxed) {
+                break;
+            }
+            if !self.network.load(Ordering::Relaxed) {
+                continue;
+            }
+            let mut held: BTreeMap<String, Vec<(String, String, u64)>> = BTreeMap::new();
+            for ((peer, share, path), size) in self.waiting.lock().unwrap().iter() {
+                held.entry(peer.clone()).or_default().push((share.clone(), path.clone(), *size));
+            }
+            self.resume_since.lock().unwrap().retain(|p, _| held.contains_key(p));
+            // Nothing held from a device any more (it all came, or went): its backoff is over.
+            let gone: Vec<String> = self.resume_cancels.lock().unwrap().keys().chain(self.resume_trial.lock().unwrap().iter()).filter(|p| !held.contains_key(*p)).cloned().collect();
+            for p in gone {
+                self.end_backoff(&p);
+            }
+            let iface_gen = self.net.interface_gen();
+            for (peer, items) in held {
+                let new_link = self.net.measure(&peer).await;
+                // An interface of this device came up or went down since the watcher last looked: the path may be faster.
+                let iface_changed = self.resume_gen.lock().unwrap().insert(peer.clone(), iface_gen).is_some_and(|g| g != iface_gen);
+                let fresh = new_link || iface_changed;
+                if fresh {
+                    // A new link or a change of interface ends the backoff at once, so a real speed-up is caught right away.
+                    self.end_backoff(&peer);
+                }
+                let class = self.class_of(&peer);
+                let allowed = items.iter().any(|(share, path, size)| if path.is_empty() { class != Speed::Slow } else { self.class_allows(class, share, *size) && !self.over_cap(&peer, *size) });
+                if !allowed {
+                    self.resume_since.lock().unwrap().remove(&peer);
+                    continue;
+                }
+                let since = *self.resume_since.lock().unwrap().entry(peer.clone()).or_insert_with(Instant::now);
+                if fresh || since.elapsed() >= self.resume_hold_for(&peer) {
+                    self.resume_since.lock().unwrap().remove(&peer);
+                    self.resume_trial.lock().unwrap().insert(peer.clone());
+                    #[cfg(feature = "test-hooks")]
+                    self.resume_fires.lock().unwrap().push((std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map_or(0, |d| d.as_millis() as u64), if new_link { "new link" } else if iface_changed { "interface" } else { "hold" }, self.resume_cancels.lock().unwrap().get(&peer).copied().unwrap_or(0)));
+                    self.due.lock().unwrap().insert(peer.clone());
+                    self.due_why.lock().unwrap().insert(peer.clone(), format!("faster connection to {}", self.peer_name(&peer)));
+                    self.wake_due.notify_one();
+                }
+            }
+        }
+    }
+
+    /// How long the link of `peer` must allow what is held back before a round for it is started.
+    fn resume_hold_for(&self, peer: &str) -> Duration {
+        let cancels = self.resume_cancels.lock().unwrap().get(peer).copied().unwrap_or(0);
+        backoff_hold(self.resume_hold, cancels, self.resume_cap)
+    }
+
+    /// A round the watcher started for `peer` gave an item back to waiting: a slow cancel, the next retry waits twice as long.
+    fn note_slow_cancel(&self, peer: &str) {
+        if self.resume_trial.lock().unwrap().remove(peer) {
+            *self.resume_cancels.lock().unwrap().entry(peer.to_string()).or_insert(0) += 1;
+        }
+    }
+
+    /// What the watcher held against `peer` is over: the backoff starts again.
+    fn end_backoff(&self, peer: &str) {
+        self.resume_trial.lock().unwrap().remove(peer);
+        self.resume_cancels.lock().unwrap().remove(peer);
+    }
+
+    /// Tells the linked devices that keep a folder when its counter or epoch moves ([`Inner::store_index`]): one notice per device
+    /// and folder for a burst of writes, carrying the latest counter. Runs for as long as the engine does.
+    async fn notice_loop(self: Arc<Self>) {
+        loop {
+            self.notice_wake.notified().await;
+            if self.stop.load(Ordering::Relaxed) {
+                break;
+            }
+            tokio::time::sleep(NOTICE_EVERY).await;
+            let mut dirty: Vec<String> = std::mem::take(&mut *self.notice_dirty.lock().unwrap()).into_iter().collect();
+            // A change of the entry points goes to every linked device (whatever it shares), coalesced like a folder's.
+            let entries = dirty.iter().any(|d| d == ENTRIES_NOTICE);
+            dirty.retain(|d| d != ENTRIES_NOTICE);
+            let peers: Vec<String> = self.saved.lock().unwrap().peers.iter().map(|p| p.id.clone()).collect();
+            for peer in peers {
+                let mut wanted: Vec<String> = if self.peer_has_summary(&peer) { dirty.iter().filter(|sh| self.shares_with(sh, &peer)).cloned().collect() } else { Vec::new() };
+                if entries {
+                    wanted.push(ENTRIES_NOTICE.to_string());
+                }
+                if !wanted.is_empty() {
+                    self.queue_notices(&peer, wanted);
+                }
+            }
+        }
+    }
+
+    fn queue_notices(self: &Arc<Self>, peer: &str, shares: Vec<String>) {
+        let start = {
+            let mut out = self.notice_out.lock().unwrap();
+            let e = out.entry(peer.to_string()).or_default();
+            e.0.extend(shares);
+            !std::mem::replace(&mut e.1, true)
+        };
+        if start {
+            let (me, peer) = (self.clone(), peer.to_string());
+            tokio::spawn(async move { me.send_notices(&peer).await });
+        }
+    }
+
+    /// Sends what is queued for `peer`, folder by folder, until nothing is. A notice that fails is let go: the round when the
+    /// device is reachable again, and the safety round, cover it.
+    async fn send_notices(self: Arc<Self>, peer: &str) {
+        loop {
+            let batch: Vec<String> = {
+                let mut out = self.notice_out.lock().unwrap();
+                let Some(e) = out.get_mut(peer) else { return };
+                if e.0.is_empty() || self.stop.load(Ordering::Relaxed) {
+                    e.1 = false;
+                    return;
+                }
+                e.0.drain().collect()
+            };
+            for share in batch {
+                #[cfg(feature = "test-hooks")]
+                if self.dir.join("no-notice").exists() {
+                    continue;
+                }
+                if share == ENTRIES_NOTICE {
+                    let Ok(body) = serde_json::to_vec(&delta::Notice { s: String::new(), e: String::new(), c: 0, v: Some(self.entries_version()) }) else { continue };
+                    self.notice_sent.fetch_add(1, Ordering::Relaxed);
+                    let name = self.peer_name(peer);
+                    if self.net.send_notice(peer, body).await.is_ok() {
+                        say(&format!("notice sent to {name}: entry points"));
+                    }
+                    continue;
+                }
+                let idx = self.load_index(&share);
+                if idx.epoch.is_empty() {
+                    continue;
+                }
+                let Ok(body) = serde_json::to_vec(&delta::Notice { s: share.clone(), e: idx.epoch, c: idx.counter, v: None }) else { continue };
+                self.notice_sent.fetch_add(1, Ordering::Relaxed);
+                let (name, sh, c) = (self.peer_name(peer), self.share_name(&share), idx.counter);
+                if self.net.send_notice(peer, body).await.is_ok() {
+                    say(&format!("notice sent to {name}: {sh} at {c}"));
+                }
+            }
+        }
+    }
+
+    /// What `peer` is doing with this device's files, for the status: what this device serves it (the windows it asks for, until
+    /// [`SERVING_FOR`] after the last one), else what its last summary said it fetches (while that summary is fresh).
+    /// The class of the link to `peer` for what this device asks of it ([`Transport::speed`]; iroh paths are Fast). Tests only: a
+    /// device with `<dir>/ignore-class` acts as a build that does not check its own class (the answering end still does).
+    fn class_of(&self, peer: &str) -> Speed {
+        #[cfg(feature = "test-hooks")]
+        if self.dir.join("ignore-class").exists() {
+            return Speed::Fast;
+        }
+        self.net.speed(peer)
+    }
+
+    /// A file of `size` in folder `share` may be asked for over a link of class `class`: a Medium link carries files up to 10 MiB
+    /// and not the big kinds ([`Config::bulk`]); a Slow link carries none as a window (a file of 8 KB or less
+    /// comes inline with its entry and is then in the store already).
+    fn class_allows(&self, class: Speed, share: &str, size: u64) -> bool {
+        class.carries_file(size) && !(class == Speed::Medium && self.bulk.contains(share))
+    }
+
+    /// A file of `size` is more than the entry point `peer` is reached through takes (its cap). Tests only: a device with
+    /// `<dir>/ignore-cap` acts as a build that does not check the cap (the answering end still does).
+    fn over_cap(&self, peer: &str, size: u64) -> bool {
+        #[cfg(feature = "test-hooks")]
+        if self.dir.join("ignore-cap").exists() {
+            return false;
+        }
+        self.net.over_cap(peer, size)
+    }
+
+    /// The page of differences to ask for over a link of class `class` (none: the answering end's own, 1 MB).
+    fn page_ask(&self, class: Speed) -> Option<usize> {
+        match class {
+            Speed::Fast => None,
+            Speed::Medium => Some(self.medium_page),
+            Speed::Slow => Some(transport::SLOW_PAGE_BYTES),
+        }
+    }
+
+    fn fetching_by(&self, peer: &str, summary: Option<&RemoteIndex>, last_seen: Option<u64>) -> Option<Value> {
+        let served = {
+            let mut sv = self.serving.lock().unwrap();
+            sv.retain(|_, s| s.at.elapsed() < SERVING_FOR * 6);
+            sv.get(peer).filter(|s| s.at.elapsed() < SERVING_FOR).and_then(|s| s.share.as_ref().map(|sh| json!({"share": sh, "size": s.size, "done": s.high})))
+        };
+        served.or_else(|| {
+            let bound = (2 * self.every).min(SUMMARY_FETCHING_FOR).as_millis() as u64;
+            let fresh = last_seen.is_some_and(|t| now_ms().saturating_sub(t) < bound);
+            summary.filter(|_| fresh).and_then(|i| i.fetching.as_ref()).map(|f| json!({"share": f.share, "size": f.size, "done": f.done}))
+        })
+    }
+
+    /// What `peer` last offered, as a file list: its summary, and for each shared folder the mirror brought up to what the summary
+    /// says (nothing asked when all is equal; the differences when only the counter moved; the folder's whole list otherwise).
+    /// Any failure ends in [`Inner::fetch_index`], today's request, which also replaces the mirrors.
+    async fn fetch_remote(&self, peer: &str, closed: &AtomicU32) -> Result<(RemoteIndex, String)> {
+        if self.peer_has_summary(peer) {
+            match self.fetch_by_summary(peer, closed).await {
+                Ok(v) => return Ok(v),
+                #[cfg(feature = "test-hooks")]
+                Err(e) if format!("{e:#}").starts_with("test: killed") => return Err(e),
+                // Not the whole list over a slow link, which is what a failed summary would fall back to.
+                Err(e) if self.class_of(peer) == Speed::Slow => return Err(e),
+                Err(_) => {}
+            }
+        }
+        if self.class_of(peer) == Speed::Slow {
+            // A device that cannot give a summary, over a slow link: its whole list waits for a faster one.
+            return Err(anyhow::Error::new(Waiting));
+        }
+        let (idx, via) = self.fetch_index(peer, closed).await?;
+        self.take_full(peer, &idx);
+        Ok((idx, via))
+    }
+
+    /// A whole file list was taken from `peer`: what it says of summaries is noted, and each folder's list becomes its mirror.
+    fn take_full(&self, peer: &str, idx: &RemoteIndex) {
+        if !idx.summary {
+            self.summary_peers.lock().unwrap().remove(peer);
+            for f in self.mirror_files(peer, &[]) {
+                let _ = std::fs::remove_file(f);
+            }
+            return;
+        }
+        self.summary_peers.lock().unwrap().insert(peer.to_string());
+        let mut keep = Vec::new();
+        for rs in &idx.shares {
+            keep.push(rs.id.clone());
+            if let Some(fp) = rs.fp.as_deref().filter(|_| !rs.index.epoch.is_empty()) {
+                if let Err(e) = write_json(&self.mirror_path(peer, &rs.id), &delta::Mirror::from_full(&rs.index, fp)) {
+                    self.note(format!("{}: {e:#}", rs.name));
+                }
+            }
+        }
+        for f in self.mirror_files(peer, &keep) {
+            let _ = std::fs::remove_file(f);
+        }
+    }
+
+    async fn fetch_by_summary(&self, peer: &str, closed: &AtomicU32) -> Result<(RemoteIndex, String)> {
+        let (bytes, via) = self.net.ask_delta(peer, Delta::Summary, Vec::new(), closed).await?;
+        self.asked_summary.fetch_add(1, Ordering::Relaxed);
+        let mut sum: RemoteIndex = serde_json::from_slice(&bytes).context("the summary from the device is not valid")?;
+        if !sum.summary {
+            bail!("the device did not send a summary");
+        }
+        let mut full = None;
+        let mut held_back = Vec::new();
+        for rs in sum.shares.iter_mut() {
+            match self.catch_up(peer, rs, closed, &mut full).await? {
+                Some(idx) => {
+                    rs.index = idx;
+                    self.waiting.lock().unwrap().remove(&(peer.to_string(), rs.id.clone(), String::new()));
+                }
+                None => held_back.push(rs.id.clone()),
+            }
+        }
+        let ids: Vec<String> = sum.shares.iter().map(|x| x.id.clone()).collect();
+        // A folder this device keeps, whose whole list a slow link does not carry: it waits for a faster one, and nothing of it is
+        // compared meanwhile (what is known of it stays as it was).
+        if !held_back.is_empty() {
+            let joined: HashSet<String> = self.saved.lock().unwrap().shares.iter().map(|s| s.id.clone()).collect();
+            for id in &held_back {
+                if joined.contains(id) {
+                    self.waiting.lock().unwrap().insert((peer.to_string(), id.clone(), String::new()), 0);
+                }
+            }
+            sum.shares.retain(|x| !held_back.contains(&x.id));
+        }
+        for f in self.mirror_files(peer, &ids) {
+            let _ = std::fs::remove_file(f);
+        }
+        Ok((sum, via))
+    }
+
+    /// The bytes of small files that came inline with their entries (Slow link): each is checked against its entry's BLAKE3 hash and
+    /// size, and only then put in the store, where the ordinary fetch finds it complete. Bytes that do not match are dropped: the file
+    /// stays wanted and waits like any file a slow link does not carry. They are held against clean-up until the file is written.
+    async fn take_inline(&self, page: &delta::Page) {
+        for ch in &page.changes {
+            let (Some(e), Some(bytes)) = (ch.e.as_ref().filter(|e| !e.deleted), delta::inline_bytes(ch)) else { continue };
+            let Ok(hash) = e.hash.parse::<Hash>() else { continue };
+            if bytes.len() as u64 != e.size || e.size > delta::INLINE_MAX || Hash::new(&bytes) != hash {
+                self.inline_bad.fetch_add(1, Ordering::Relaxed);
+                say(&format!("a small file's bytes from a device did not match its hash, so {} was not taken that way", ch.p));
+                continue;
+            }
+            if self.store.is_complete(hash).await {
+                continue;
+            }
+            let st = self.store.raw().clone();
+            let added = tokio::task::spawn_blocking(move || st.add_bytes(&bytes).map(|a| a.hash())).await;
+            if matches!(added, Ok(Ok(h)) if h == hash) {
+                self.wanted.lock().unwrap().insert(hash);
+                self.inline_ok.fetch_add(1, Ordering::Relaxed);
+            }
+        }
+    }
+
+    /// The view `peer` has of the folder `rs` summarises: the mirror when it already is at the summary's counter, the mirror
+    /// followed to it page by page (each page applied and saved in one write before the next is asked for), or the folder's
+    /// whole list (asked once for all the folders that need it, in `full`), which replaces the mirror.
+    async fn catch_up(&self, peer: &str, rs: &RemoteShare, closed: &AtomicU32, full: &mut Option<RemoteIndex>) -> Result<Option<Index>> {
+        let fp = rs.fp.clone().ok_or_else(|| anyhow!("the summary has no fingerprint for {}", rs.name))?;
+        let (epoch, counter) = (rs.index.epoch.clone(), rs.index.counter);
+        let class = self.class_of(peer);
+        let mut start = self.load_mirror(peer, &rs.id).filter(|m| m.follows(&epoch, &fp, counter));
+        if start.is_none() && class == Speed::Medium && !epoch.is_empty() {
+            // The whole comparison on a medium link goes in pages: the differences since nothing, from an empty mirror.
+            start = Some(delta::Mirror { epoch: epoch.clone(), fp: fp.clone(), ..Default::default() });
+        }
+        if let Some(mut m) = start {
+          loop {
+            if m.is_at(counter) {
+                return Ok(Some(m.index()));
+            }
+            let ask = delta::DiffAsk { share: rs.id.clone(), epoch: epoch.clone(), fp: fp.clone(), c: m.ctr, p: m.after.clone(), max: self.page_ask(class), inl: class == Speed::Slow };
+            let (bytes, _) = self.net.ask_delta(peer, Delta::Diff, serde_json::to_vec(&ask)?, closed).await?;
+            self.asked_diff.fetch_add(1, Ordering::Relaxed);
+            let page: delta::Page = serde_json::from_slice(&bytes).context("the differences from the device are not valid")?;
+            if page.full {
+                break;
+            }
+            if class == Speed::Slow {
+                self.take_inline(&page).await;
+            }
+            let before = (m.ctr, m.after.clone());
+            m.take(&page);
+            if page.more && (m.ctr, m.after.clone()) == before {
+                bail!("the differences from the device do not move on");
+            }
+            #[cfg(feature = "test-hooks")]
+            {
+                // The process is stopped after the page was taken and before it was saved (for as long as `<dir>/kill-before-mirror-save`
+                // exists): half the file reaches the temporary name, and the saved mirror stays as it was.
+                if self.dir.join("kill-before-mirror-save").exists() {
+                    let path = self.mirror_path(peer, &rs.id);
+                    let bytes = serde_json::to_vec(&m)?;
+                    std::fs::create_dir_all(path.parent().unwrap())?;
+                    std::fs::write(path.with_extension("tmp"), &bytes[..bytes.len() / 2])?;
+                    bail!("test: killed before the mirror was saved");
+                }
+            }
+            write_json(&self.mirror_path(peer, &rs.id), &m)?;
+          }
+        }
+        // The requests above have measured the link again: a slow one does not carry the whole list.
+        if self.class_of(peer) == Speed::Slow {
+            return Ok(None);
+        }
+        if full.is_none() {
+            *full = Some(self.fetch_index(peer, closed).await?.0);
+        }
+        let f = full.as_ref().and_then(|f| f.shares.iter().find(|x| x.id == rs.id)).ok_or_else(|| anyhow!("{} is not in the device's file list", rs.name))?;
+        if let Some(fp) = f.fp.as_deref().filter(|_| !f.index.epoch.is_empty()) {
+            write_json(&self.mirror_path(peer, &rs.id), &delta::Mirror::from_full(&f.index, fp))?;
+        }
+        Ok(Some(f.index.clone()))
+    }
+
+    /// The unlinks this device offers in its file list: the kept ones, newer than [`REMOVAL_KEEP_MS`].
+    fn removals_to_offer(&self, s: &Saved) -> Vec<Removal> {
+        #[cfg(feature = "test-hooks")]
+        {
+            if self.dir.join("no-removed-field").exists() {
+                // Acts as build 54, which says nothing about unlinks.
+                return Vec::new();
+            }
+            if let Some(v) = read_json::<Vec<Removal>>(&self.dir.join("inject-removals.json")) {
+                // Exactly these, signed or not as the test made them.
+                return v;
+            }
+        }
+        let now = now_ms();
+        s.removals.iter().filter(|r| now.saturating_sub(r.t) < REMOVAL_KEEP_MS).cloned().collect()
     }
 
     /// `share` is kept with the linked device `peer` ([`Config::with`]).
@@ -1550,13 +2712,89 @@ impl Inner {
     /// Takes the link to `id` out of everything this device holds about it: the saved links, who may connect, what was learned and
     /// received. The same for a link taken off here and for one the other device unlinked. Files already here stay.
     fn remove_peer(&self, id: &str) -> Result<()> {
-        self.saved.lock().unwrap().peers.retain(|p| p.id != id);
+        {
+            let mut sv = self.saved.lock().unwrap();
+            let was_linked = sv.peers.iter().any(|p| p.id == id);
+            sv.peers.retain(|p| p.id != id);
+            let now = now_ms();
+            sv.former.retain(|f| f.id != id && now.saturating_sub(f.t) < REMOVAL_KEEP_MS);
+            if was_linked && id != self.me {
+                sv.former.push(Former { id: id.to_string(), t: now });
+            }
+        }
+        self.push_former();
         self.net.disallow(id);
         self.run.lock().unwrap().peers.remove(id);
+        self.waiting.lock().unwrap().retain(|(p, _, _), _| p != id);
+        self.waiting_cap.lock().unwrap().retain(|(p, _, _)| p != id);
+        self.summary_peers.lock().unwrap().remove(id);
+        for f in self.mirror_files(id, &[]) {
+            let _ = std::fs::remove_file(f);
+        }
+        self.due.lock().unwrap().remove(id);
+        self.heard_from.lock().unwrap().remove(id);
+        self.reach_pending.lock().unwrap().remove(id);
+        self.last_contact.lock().unwrap().remove(id);
+        self.serving.lock().unwrap().remove(id);
+        self.notice_out.lock().unwrap().remove(id);
         self.secrets.lock().unwrap().remove(id);
         self.received.lock().unwrap().remove(id);
         self.refused.lock().unwrap().remove(id);
         self.save()
+    }
+
+    /// Tells the transport which devices used to be linked and are not now (the kept ones, newer than [`REMOVAL_KEEP_MS`]).
+    fn push_former(&self) {
+        let now = now_ms();
+        let ids: Vec<String> = self.saved.lock().unwrap().former.iter().filter(|f| now.saturating_sub(f.t) < REMOVAL_KEEP_MS).map(|f| f.id.clone()).collect();
+        self.net.set_former(&ids);
+    }
+
+    /// The person unlinks `id` here: [`Inner::remove_peer`], then a signed [`Removal`] kept for the other linked devices
+    /// ([`REMOVAL_KEEP_MS`]), which unlink it too when they next see this device's file list. A device that is not linked is only
+    /// cleaned up, and nothing is offered.
+    fn remove_device(&self, id: &str) -> Result<()> {
+        let linked = self.saved.lock().unwrap().peers.iter().any(|p| p.id == id);
+        if linked && id != self.me {
+            let (key, _) = identity::load_or_create(&self.dir)?;
+            let now = now_ms();
+            let mut sv = self.saved.lock().unwrap();
+            sv.removals.retain(|r| r.target != id && now.saturating_sub(r.t) < REMOVAL_KEEP_MS);
+            sv.removals.push(sign_removal(&key, id, now));
+        }
+        self.remove_peer(id)
+    }
+
+    /// A linked device's file list carries unlinks: applies each that holds up, as a local unlink without a new Removal (so
+    /// nothing echoes). It holds up when `by` is linked here, the signature is `by`'s, the target is linked here and is not this
+    /// device, and `t` is after this device linked with the target (a link with no time saved counts as older).
+    fn apply_removals(&self, list: &[Removal]) {
+        for r in list {
+            if r.target == self.me || r.by == self.me {
+                continue;
+            }
+            let (by, target) = {
+                let sv = self.saved.lock().unwrap();
+                (sv.peers.iter().find(|p| p.id == r.by).cloned(), sv.peers.iter().find(|p| p.id == r.target).cloned())
+            };
+            let (Some(by), Some(target)) = (by, target) else { continue };
+            if !removal_checks_out(r) {
+                continue;
+            }
+            if r.t <= target.linked {
+                // Said once for each, not on every round: the sender keeps offering it.
+                if self.refused_removals.lock().unwrap().insert((r.target.clone(), r.by.clone(), r.t)) {
+                    self.note(format!(
+                        "Not unlinked {}: the request from {} is older than this link (check the clocks on both devices)",
+                        target.name, by.name
+                    ));
+                }
+                continue;
+            }
+            if self.remove_peer(&target.id).is_ok() {
+                self.note(format!("{} unlinked {}", by.name, target.name));
+            }
+        }
     }
 
     /// Notes how a check-in with `peer` ended, and drops the link when the other device has refused it as "not linked" (403) in
@@ -1582,7 +2820,18 @@ impl Inner {
                 false
             }
         };
-        drop_it && self.remove_peer(peer).is_ok()
+        if !drop_it {
+            return false;
+        }
+        // The name this device had saved for it, read before the entry goes.
+        let name = self.peer_name(peer);
+        if self.remove_peer(peer).is_err() {
+            return false;
+        }
+        let line = format!("{name} unlinked this device");
+        self.note(line.clone());
+        say(&line);
+        true
     }
 
     /// Removes the links made here by showing a code that the other device still has not confirmed [`CONFIRM_WINDOW`] after
@@ -1636,6 +2885,80 @@ impl Inner {
     async fn fetch_secrets(&self, peer: &str) -> Result<BTreeMap<String, String>> {
         let (bytes, _) = self.net.ask(peer, Ask::Secrets, &AtomicU32::new(0)).await?;
         serde_json::from_slice(&bytes).context("the keys from the device are not valid")
+    }
+
+    /// The hash of this device's entry points ([`entries::version`]).
+    fn entries_version(&self) -> String {
+        entries::version(&self.entries.lock().unwrap())
+    }
+
+    /// Tells the network the entry points it is to have: this device's list (without removals) and the test block's.
+    fn push_entries(&self) {
+        let mut points: Vec<entries::EntryPoint> = self.entries.lock().unwrap().iter().filter(|r| !r.removed).map(|r| r.point()).collect();
+        points.extend(self.extra_entries.iter().cloned());
+        self.net.set_entry_points(points);
+    }
+
+    /// Tells the linked devices (a notice with the new `entries_v`, coalesced with others to the same device) that this device's
+    /// list changed.
+    fn entries_changed(&self) {
+        self.notice_dirty.lock().unwrap().insert(ENTRIES_NOTICE.to_string());
+        self.notice_wake.notify_one();
+    }
+
+    /// Changes the list under its lock, saves it (a temporary file, then a rename) and tells the network. What `f` returns, or its
+    /// refusal (then nothing is changed or saved).
+    fn change_entries<R>(&self, f: impl FnOnce(&mut Vec<entries::Record>) -> Result<R>) -> Result<R> {
+        let out = {
+            let mut list = self.entries.lock().unwrap();
+            let mut next = list.clone();
+            let out = f(&mut next)?;
+            let next = entries::tidied(next, now_ms());
+            if next != *list {
+                entries::save(&self.dir, &next)?;
+                *list = next;
+                self.entries_changed();
+            }
+            out
+        };
+        self.push_entries();
+        self.wake.notify_one();
+        Ok(out)
+    }
+
+    /// Asks `peer` for its entry points.
+    async fn fetch_entries(&self, peer: &str) -> Result<Vec<entries::Record>> {
+        let (bytes, _) = self.net.ask(peer, Ask::Entries, &AtomicU32::new(0)).await?;
+        self.asked_entries.fetch_add(1, Ordering::Relaxed);
+        let list: Vec<entries::Record> = serde_json::from_slice(&bytes).context("the entry points from the device are not valid")?;
+        Ok(list.into_iter().filter(|r| entries::id_ok(&r.id)).collect())
+    }
+
+    /// Takes what another device's list adds to this one's: per entry the newer change, a removal over an older entry. Saved, and
+    /// the network told, when it changed anything. `v` is the hash the device said, noted so the same list is not asked for again.
+    fn take_entries(&self, peer: &str, name: &str, theirs: Vec<entries::Record>, v: String) {
+        let changed = {
+            let mut list = self.entries.lock().unwrap();
+            let next = entries::merge(&list, &theirs, now_ms());
+            if next == *list {
+                false
+            } else if let Err(e) = entries::save(&self.dir, &next) {
+                drop(list);
+                self.note(format!("Entry points from {name}: could not save them: {e:#}"));
+                return;
+            } else {
+                *list = next;
+                true
+            }
+        };
+        if changed {
+            self.entries_changed();
+        }
+        self.entries_seen.lock().unwrap().insert(peer.to_string(), v);
+        if changed {
+            self.push_entries();
+            self.note(format!("Entry points updated from {name}"));
+        }
     }
 
     /// Free bytes now on the volume holding `path` (or its nearest existing parent): the figure shown on screen.
@@ -1709,14 +3032,27 @@ impl Inner {
             return;
         }
         self.drop_unconfirmed();
+        // Also lets a former device that is past its 30 days go.
+        self.push_former();
         let peers: Vec<Peer> = self.saved.lock().unwrap().peers.iter().filter(|p| scope.has_peer(&p.id)).cloned().collect();
+        {
+            // Every device this round covers has been asked as of now (the safety round counts from it).
+            let (mut lc, now) = (self.last_contact.lock().unwrap(), Instant::now());
+            for p in &peers {
+                lc.insert(p.id.clone(), now);
+            }
+        }
         // First every reachable peer's index, so each file can be fetched from every peer that has it.
         for p in &peers {
             if !self.may_use_network() {
                 break;
             }
+            if !self.saved.lock().unwrap().peers.iter().any(|x| x.id == p.id) {
+                // Unlinked meanwhile (a linked device's unlink of it, in this round).
+                continue;
+            }
             let closed = AtomicU32::new(0);
-            let res = self.fetch_index(&p.id, &closed).await;
+            let res = self.fetch_remote(&p.id, &closed).await;
             // Whether the other device has unlinked this one (see check_in_ended): then there is nothing more to do with it.
             let code = Some(closed.load(Ordering::Relaxed)).filter(|c| *c != 0);
             if self.check_in_ended(&p.id, code, res.is_ok()) {
@@ -1724,6 +3060,16 @@ impl Inner {
             }
             let mut asks = None;
             let mut learned = None;
+            // The device unlinked others and says so (signed): this one unlinks them too.
+            if let Some(list) = res.as_ref().ok().map(|(idx, _)| idx.removed.clone()).filter(|l| !l.is_empty()) {
+                self.apply_removals(&list);
+            }
+            // A file list from a device linked before Reticulum (or from build 54) tells where to reach it.
+            if let Some(r) = res.as_ref().ok().and_then(|(idx, _)| idx.rns.clone()) {
+                if p.rns.as_ref().map(|x| x.dest.as_str()) != Some(r.dest.as_str()) {
+                    self.learn_rns(&p.id, &r);
+                }
+            }
             // A file list that carries the device's own copy of the link shows it holds the link too. (That it answered is not
             // enough: a device still waiting for the answer to a code already lets this one in.)
             if p.unconfirmed && res.as_ref().map(|(idx, _)| idx.link.is_some()).unwrap_or(false) {
@@ -1738,7 +3084,7 @@ impl Inner {
                         learned = Some((idx.name.clone(), via.clone()));
                         st.via = Some(via);
                         st.error = None;
-                        asks = Some((idx.link.clone(), idx.secrets.clone()));
+                        asks = Some((idx.link.clone(), idx.secrets.clone(), idx.entries_v.clone()));
                         st.index = Some(idx);
                     }
                     Err(e) => {
@@ -1757,7 +3103,7 @@ impl Inner {
                     let _ = self.save();
                 }
             }
-            let Some((link, secrets)) = asks else { continue };
+            let Some((link, secrets, entries_v)) = asks else { continue };
             if let Some(l) = link {
                 self.adopt_link(&p.id, l);
             }
@@ -1769,6 +3115,15 @@ impl Inner {
                             self.received.lock().unwrap().insert(p.id.clone(), (secrets_digest(&m), Some(m)));
                         }
                         Err(e) => self.note(format!("Keys from {}: {e:#}", p.name)),
+                    }
+                }
+            }
+            // A device that says its entry points are not the same as these (an older one says nothing and is not asked).
+            if let Some(v) = entries_v {
+                if v != self.entries_version() && self.entries_seen.lock().unwrap().get(&p.id) != Some(&v) {
+                    match self.fetch_entries(&p.id).await {
+                        Ok(list) => self.take_entries(&p.id, &p.name, list, v),
+                        Err(e) => self.note(format!("Entry points from {}: {e:#}", p.name)),
                     }
                 }
             }
@@ -1798,7 +3153,7 @@ impl Inner {
         }
         let mut run = self.run.lock().unwrap();
         run.paused = if self.network.load(Ordering::Relaxed) { paused } else { Some("Sync is paused: no network it may use".into()) };
-        if scope.whole() {
+        if scope.counts() {
             run.rounds += 1;
             run.last_round = Some(now_ms());
         }
@@ -1806,6 +3161,7 @@ impl Inner {
 
     async fn fetch_index(&self, peer: &str, closed: &AtomicU32) -> Result<(RemoteIndex, String)> {
         let (bytes, via) = self.net.ask(peer, Ask::Index, closed).await?;
+        self.asked_full.fetch_add(1, Ordering::Relaxed);
         Ok((serde_json::from_slice(&bytes).context("the file list from the device is not valid")?, via))
     }
 
@@ -1846,6 +3202,7 @@ impl Inner {
         // taken alone, the notebook writes the file back. Not for a file with no room for it: a delete may be what makes room.
         let mut deletes_wait = false;
         let mut no_room: Option<anyhow::Error> = None;
+        let fetch_paths: HashSet<String> = actions.iter().filter_map(|a| if let Action::Fetch { path, .. } = a { Some(path.clone()) } else { None }).collect();
         for a in actions {
             if self.stop.load(Ordering::Relaxed) {
                 break;
@@ -1909,14 +3266,43 @@ impl Inner {
                     if held && excluded(last, &path) {
                         continue;
                     }
+                    let size = entry.size;
+                    let key = (sh.id.clone(), path.clone());
+                    let wkey = (from.to_string(), sh.id.clone(), path.clone());
                     match self.fetch(sh, &path, entry, conflict, from).await {
-                        Ok(true) => {}
+                        Ok(true) => {
+                            self.waiting.lock().unwrap().remove(&wkey);
+                            self.waiting_cap.lock().unwrap().remove(&wkey);
+                            self.end_backoff(from);
+                            if self.held_from.lock().unwrap().get_mut(from).is_some_and(|s| s.remove(&key)) {
+                                say(&format!("fetch from {} resumed and finished ({} MB)", self.peer_name(from), size / 1_048_576));
+                            }
+                        }
                         Ok(false) => {
                             held = true;
+                            self.waiting.lock().unwrap().remove(&wkey);
+                            self.waiting_cap.lock().unwrap().remove(&wkey);
                             deletes_wait = true;
+                            if let Some(s) = self.held_from.lock().unwrap().get_mut(from) {
+                                s.remove(&key);
+                            }
+                        }
+                        // The link's class holds it back: listed as waiting, still wanted (held like a file not yet fetched, so
+                        // the next round asks again), and not an error.
+                        Err(e) if is_waiting(&e) => {
+                            held = true;
+                            self.note_slow_cancel(from);
+                            self.held_from.lock().unwrap().entry(from.to_string()).or_default().insert(key);
+                            if is_waiting_cap(&e) {
+                                self.waiting_cap.lock().unwrap().insert(wkey.clone());
+                            } else {
+                                self.waiting_cap.lock().unwrap().remove(&wkey);
+                            }
+                            self.waiting.lock().unwrap().insert(wkey, size);
                         }
                         Err(e) => {
                             held = true;
+                            self.held_from.lock().unwrap().entry(from.to_string()).or_default().insert(key);
                             let msg = format!("{e:#}");
                             if !msg.starts_with("Paused:") {
                                 deletes_wait = true;
@@ -1937,6 +3323,14 @@ impl Inner {
                     }
                 }
             }
+        }
+        if !self.stop.load(Ordering::Relaxed) {
+            // What this device no longer wants from `from` (gone or replaced there) is not held.
+            if let Some(s) = self.held_from.lock().unwrap().get_mut(from) {
+                s.retain(|(id, p)| *id != sh.id || fetch_paths.contains(p));
+            }
+            self.waiting.lock().unwrap().retain(|(f, id, p), _| p.is_empty() || f != from || *id != sh.id || fetch_paths.contains(p));
+            self.waiting_cap.lock().unwrap().retain(|(f, id, p)| f != from || *id != sh.id || fetch_paths.contains(p));
         }
         match no_room {
             Some(e) => Err(e),
@@ -1975,15 +3369,29 @@ impl Inner {
                 bail!("no linked device has {path} right now");
             }
             self.wanted.lock().unwrap().insert(hash);
+            // Only from the devices whose route and link carry it: the others hold it back, and it waits (for Wi-Fi, or a faster link).
+            // Not through an entry point whose cap is less than the file: that waits for another way (Wi-Fi). This is looked at first,
+            // since a faster connection through the same entry point would not change it.
+            let by_cap: Vec<String> = providers.into_iter().filter(|p| !self.over_cap(p, entry.size)).collect();
+            if by_cap.is_empty() {
+                return Err(anyhow::Error::new(WaitingCap));
+            }
+            let providers: Vec<String> = by_cap.into_iter().filter(|p| self.class_allows(self.class_of(p), &sh.id, entry.size)).collect();
+            if providers.is_empty() {
+                return Err(anyhow::Error::new(Waiting));
+            }
             self.run.lock().unwrap().transfer = Some(Transfer {
+                share_id: sh.id.clone(),
                 share: sh.name.clone(),
                 path: path.to_string(),
                 size: entry.size,
                 done: 0,
                 from: providers.iter().map(|p| self.peer_name(p)).collect(),
             });
-            let mut stream = self.net.fetch(self.store.raw(), hash, providers).await?;
+            let mut stream = self.net.fetch(self.store.raw(), hash, providers.clone()).await?;
             let mut failed = None;
+            let mut too_slow = false;
+            let mut over_cap = false;
             let mut last_progress = Instant::now();
             loop {
                 // Woken every second even when nothing arrives, so a pause or a stalled path is noticed.
@@ -1995,8 +3403,36 @@ impl Inner {
                             if let Some(t) = self.run.lock().unwrap().transfer.as_mut() {
                                 t.done = n;
                             }
+                            #[cfg(feature = "test-hooks")]
+                            if n > 0 && self.dir.join("drop-fetch-mid").exists() {
+                                // A link that drops part way: while `<dir>/drop-fetch-mid` exists a fetch fails after its first window.
+                                failed = Some("test: link dropped".to_string());
+                                break;
+                            }
+                            #[cfg(feature = "test-hooks")]
+                            {
+                                // A fetch caught part way (after its first window): held while `<dir>/hold-fetch-mid` exists, and
+                                // it says so with `<dir>/hold-fetch.held`.
+                                let hold = self.dir.join("hold-fetch-mid");
+                                if n > 0 && hold.exists() {
+                                    let _ = std::fs::write(self.dir.join("hold-fetch.held"), b"");
+                                    while hold.exists() {
+                                        tokio::time::sleep(Duration::from_millis(50)).await;
+                                    }
+                                    let _ = std::fs::remove_file(self.dir.join("hold-fetch.held"));
+                                    last_progress = Instant::now();
+                                }
+                            }
                         }
                         FetchEvent::Failed(m) => failed = Some(m),
+                        FetchEvent::Waiting(m) => {
+                            failed = Some(m);
+                            too_slow = true;
+                        }
+                        FetchEvent::OverCap(m) => {
+                            failed = Some(m);
+                            over_cap = true;
+                        }
                     },
                     Err(_) => {}
                 }
@@ -2010,8 +3446,19 @@ impl Inner {
                     break;
                 }
             }
+            let done = self.run.lock().unwrap().transfer.as_ref().map(|t| t.done).unwrap_or(0);
             self.run.lock().unwrap().transfer = None;
             if let Some(f) = failed {
+                if over_cap {
+                    // The other end says the entry point this goes through takes no file that big: held back, not failed.
+                    return Err(anyhow::Error::new(WaitingCap));
+                }
+                if too_slow {
+                    // Either end says the link is too slow for it: held back, not failed. What arrived stays in the store.
+                    return Err(anyhow::Error::new(Waiting));
+                }
+                let names: Vec<String> = providers.iter().map(|p| self.peer_name(p)).collect();
+                say(&format!("fetch from {} stopped at {}/{} MB: {f} (will retry)", names.join(", "), done / 1_048_576, need / 1_048_576));
                 // What arrived stays in the store (still wanted), so the next round carries on from there.
                 if f == NO_SPACE {
                     bail!("Paused: no room to keep {path} ({} needed). Free up space and it carries on.", human(need));
@@ -2263,6 +3710,33 @@ fn links_grace_until(dir: &Path, recovered: bool) -> Result<u64> {
 struct PairHello {
     token: String,
     name: String,
+    /// The device key of the sender, for a pairing over Reticulum (over iroh the connection proves it).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    key: Option<String>,
+    /// The sender's Reticulum destination and signature.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    rns: Option<RnsProof>,
+}
+
+/// The Reticulum interfaces to start with: the test block's (or Wi-Fi auto, unless the mode is `"entries"`), and every entry point that
+/// is on (this device's, and the test block's own).
+#[cfg(any(target_os = "linux", target_os = "android", target_os = "ios"))]
+fn rns_ifaces(cfg: &Config, entries: &[entries::EntryPoint]) -> Vec<cache_rns::Iface> {
+    let mut v = Vec::new();
+    match &cfg.rns_interfaces {
+        Some(t) => {
+            v.extend(t.tcp_listen.iter().map(|a| cache_rns::Iface::TcpListen(a.clone())));
+            v.extend(t.tcp_connect.iter().map(|a| cache_rns::Iface::TcpConnect(a.clone())));
+            if t.wifi {
+                v.push(cache_rns::Iface::WifiAuto);
+            }
+        }
+        None if cfg.reticulum == Reticulum::Entries => {}
+        None => v.push(cache_rns::Iface::WifiAuto),
+    }
+    let block = cfg.rns_interfaces.iter().flat_map(|t| t.entries.iter());
+    v.extend(entries.iter().chain(block).filter(|e| e.on).map(|e| cache_rns::Iface::Entry(rns_transport::to_rns(e))));
+    v
 }
 
 /// What the network asks of the engine: answers linking requests that carry the code being shown, and the questions of linked devices.
@@ -2282,25 +3756,86 @@ impl Serve for Inner {
         let reply = if let (true, Some(h)) = (ok, hello) {
             // Not confirmed until the other device comes back: this answer may never reach it.
             add_peer(self, peer, &h.name, true);
+            if let Some(r) = &h.rns {
+                self.learn_rns(peer, r);
+            }
             self.note(format!("Linked with {}", h.name));
             self.wake.notify_one();
-            json!({"ok": true, "name": self.saved.lock().unwrap().name})
+            let mut reply = json!({"ok": true, "name": self.saved.lock().unwrap().name});
+            if let Some((dest, sig)) = self.rns_info() {
+                reply["rns"] = json!({"dest": dest, "sig": sig});
+            }
+            reply
         } else {
             json!({"ok": false, "error": "that code is not being shown any more"})
         };
         reply.to_string().into_bytes()
     }
 
+    fn pair_short(self: Arc<Self>, body: Vec<u8>) -> transport::BoxFut<'static, Vec<u8>> {
+        Box::pin(async move {
+            let refuse = |why: &str| json!({"ok": false, "error": why}).to_string().into_bytes();
+            let Ok(req) = serde_json::from_slice::<ShortPair>(&body) else { return refuse("not a pairing request") };
+            let secret = data_encoding::BASE32_NOPAD.decode(req.secret.as_bytes()).unwrap_or_default();
+            // The checks, in order: a code is being shown and has not run out; the secret is right (three wrong ones burn the
+            // code); the requester's signature checks out. Only a good one uses the code up.
+            {
+                let mut live = self.short.lock().unwrap();
+                let now = self.code_now();
+                match live.as_mut() {
+                    Some(c) if now < c.expires_ms => {
+                        if !ct_eq(&c.secret, &secret) {
+                            c.strikes += 1;
+                            if c.strikes >= SHORT_STRIKES {
+                                *live = None;
+                            }
+                            return refuse("that code is not right");
+                        }
+                    }
+                    _ => {
+                        *live = None;
+                        return refuse("that code is not being shown any more");
+                    }
+                }
+                if !self.net.verify_rns(&req.hello.key, &req.hello.rns.dest, &req.hello.rns.sig) {
+                    return refuse("the hello's signature does not check out");
+                }
+                *live = None; // one use
+            }
+            let h = req.hello;
+            if let Some(a) = h.iroh.clone() {
+                self.net.learn_iroh(a);
+            }
+            // Not confirmed until the other device comes back: this answer may never reach it.
+            add_peer(&self, &h.key, &h.name, true);
+            self.learn_rns(&h.key, &h.rns);
+            self.note(format!("Linked with {}", h.name));
+            self.wake.notify_one();
+            let Some((dest, sig)) = self.rns_info() else { return refuse("Reticulum is not running here") };
+            let net = self.net.clone();
+            let iroh = self.hello_iroh(net.link_addr().await.0);
+            let hello = ShortHello { key: self.me.clone(), iroh, name: self.saved.lock().unwrap().name.clone(), rns: RnsProof { dest, sig } };
+            json!({"ok": true, "hello": hello}).to_string().into_bytes()
+        })
+    }
+
     fn answer(self: Arc<Self>, peer: String, ask: Ask) -> transport::BoxFut<'static, Vec<u8>> {
         Box::pin(async move {
+            // The entry points hold passphrases: only a device that is linked is answered, and nothing else happens for one that is not.
+            if ask == Ask::Entries && !self.saved.lock().unwrap().peers.iter().any(|p| p.id == peer) {
+                say("entry points asked for by a device that is not linked: refused");
+                return b"not linked".to_vec();
+            }
             // Only a device that holds the link asks: a link made here by showing a code is confirmed by it.
             self.confirm_peer(&peer);
+            self.heard_from.lock().unwrap().insert(peer.clone());
             match ask {
                 Ask::Secrets => {
                     // Only the secrets set for the device asking, over its own connection (end to end encrypted to its key).
                     let mine = self.secrets.lock().unwrap().get(&peer).cloned().unwrap_or_default();
                     serde_json::to_vec(&mine).unwrap_or_default()
                 }
+                Ask::Entries => serde_json::to_vec(&*self.entries.lock().unwrap()).unwrap_or_default(),
                 Ask::Index => tokio::task::spawn_blocking(move || serde_json::to_vec(&self.our_index_for(&peer)).unwrap_or_default())
                     .await
                     .unwrap_or_default(),
@@ -2308,12 +3843,196 @@ impl Serve for Inner {
         })
     }
 
+    fn answer_delta(self: Arc<Self>, peer: String, what: Delta, body: Vec<u8>) -> transport::BoxFut<'static, Vec<u8>> {
+        Box::pin(async move {
+            self.confirm_peer(&peer);
+            self.heard_from.lock().unwrap().insert(peer.clone());
+            #[cfg(feature = "test-hooks")]
+            if self.dir.join("no-delta").exists() {
+                return b"error: test: not answered".to_vec();
+            }
+            tokio::task::spawn_blocking(move || match what {
+                Delta::Summary => serde_json::to_vec(&self.index_for(&peer, false)).unwrap_or_default(),
+                Delta::Diff => self.diff_answer(&peer, &body),
+            })
+            .await
+            .unwrap_or_default()
+        })
+    }
+
     fn asked(&self, peer: &str) {
+        self.asked_wakes(peer);
+    }
+
+    fn page_cap(&self, speed: Speed) -> usize {
+        match speed {
+            Speed::Fast => delta::PAGE_BYTES,
+            Speed::Medium => self.medium_page,
+            Speed::Slow => transport::SLOW_PAGE_BYTES,
+        }
+    }
+
+    /// The big kinds do not go over a Medium link: a window is refused when every folder kept with `peer` that lists the file is
+    /// one of them. A file no folder lists (or any folder that is not a big kind lists) goes, subject to its size.
+    fn refused_over_cap(&self, _peer: &str, _hash: &str) {
+        self.refused_cap.fetch_add(1, Ordering::Relaxed);
+    }
+
+    #[cfg(feature = "test-hooks")]
+    fn test_refuse_blobs(&self) -> bool {
+        // A device with `<dir>/refuse-blobs` refuses every window as too slow (a link that turned out slow at the answering end).
+        self.dir.join("refuse-blobs").exists()
+    }
+
+    fn blob_allowed(&self, peer: &str, hash: &str, speed: Speed) -> bool {
+        if speed != Speed::Medium {
+            return true;
+        }
+        let shares = self.saved.lock().unwrap().shares.clone();
+        let listing: Vec<&Share> = shares
+            .iter()
+            .filter(|sh| self.shares_with(&sh.id, peer))
+            .filter(|sh| self.load_index(&sh.id).files.values().any(|e| !e.deleted && e.hash == hash))
+            .collect();
+        listing.is_empty() || listing.iter().any(|sh| !self.bulk.contains(&sh.id))
+    }
+
+    fn link_closed(&self, peer: &str, reason: &str, open_secs: Option<u64>, rtt_ms: Option<u64>) {
+        say(&link_closed_line(&self.peer_name(peer), reason, open_secs, rtt_ms));
+    }
+
+    fn route_moved(&self, peer: &str, now: &str, was: &str, from: &str) {
+        say(&route_moved_line(&self.peer_name(peer), now, was, from));
+    }
+
+    fn notice(&self, peer: &str, body: &[u8]) -> Vec<u8> {
+        // The network lets only a linked device's notice through; the engine checks again, since a notice starts a round.
+        if !self.saved.lock().unwrap().peers.iter().any(|p| p.id == peer) {
+            say("notice from a device that is no longer linked: refused");
+            return b"not linked".to_vec();
+        }
+        let Ok(n) = serde_json::from_slice::<delta::Notice>(body) else { return b"not a notice".to_vec() };
+        self.notice_got.fetch_add(1, Ordering::Relaxed);
+        self.heard_from.lock().unwrap().insert(peer.to_string());
+        if let Some(v) = &n.v {
+            // Its entry points changed: when its list is not the one this device has, nor the one last taken from it, a round with
+            // it is due now (it asks `cache.entries`), so a quiet device does not wait for its safety round.
+            let differs = *v != self.entries_version() && self.entries_seen.lock().unwrap().get(peer) != Some(v);
+            say(&format!("notice from {}: entry points{}", self.peer_name(peer), if differs { "" } else { " (already up to date)" }));
+            if differs {
+                self.make_due(peer);
+            }
+            if n.s.is_empty() {
+                return b"ok".to_vec();
+            }
+        }
+        // Caught up already (the saved mirror is at this epoch and counter or past it): nothing to ask.
+        let behind = self.load_mirror(peer, &n.s).is_none_or(|m| m.epoch != n.e || n.c > m.ctr || m.after.is_some());
+        say(&format!("notice from {}: {} at {}{}", self.peer_name(peer), self.share_name(&n.s), n.c, if behind { "" } else { " (already up to date)" }));
+        if behind {
+            self.make_due(peer);
+        }
+        b"ok".to_vec()
+    }
+
+    fn reachable(&self, peer: &str) {
+        if self.saved.lock().unwrap().peers.iter().any(|p| p.id == peer) {
+            // A moment later: a round the instant an announce is heard can ask before the link to the device can be made.
+            self.reach_pending.lock().unwrap().insert(peer.to_string(), Instant::now() + REACHABLE_DELAY);
+            self.wake_due.notify_one();
+        }
+    }
+
+    fn blobs_ready(&self) -> bool {
+        #[cfg(feature = "test-hooks")]
+        if self.dir.join("hold-store-ready").exists() {
+            return false;
+        }
+        self.store_ready.load(Ordering::SeqCst)
+    }
+
+    fn served(&self, peer: &str, hash: &str, end: u64) {
+        #[cfg(feature = "test-hooks")]
+        if self.dir.join("no-serve-signal").exists() {
+            return;
+        }
         let now = Instant::now();
-        let mut at = self.asked_at.lock().unwrap();
-        if at.get(peer).is_none_or(|t| now.duration_since(*t) >= self.every) {
-            at.insert(peer.to_string(), now);
-            self.wake.notify_one();
+        {
+            let mut sv = self.serving.lock().unwrap();
+            if let Some(s) = sv.get_mut(peer).filter(|s| s.hash == hash) {
+                s.high = s.high.max(if s.size > 0 { end.min(s.size) } else { end });
+                s.at = now;
+                return;
+            }
+        }
+        // The first window of a file: which folder of ours lists it, and its size there (our own index).
+        let shares = self.saved.lock().unwrap().shares.clone();
+        let found = shares.iter().filter(|sh| self.shares_with(&sh.id, peer)).find_map(|sh| {
+            self.load_index(&sh.id).files.values().find(|e| !e.deleted && e.hash == hash).map(|e| (sh.id.clone(), e.size))
+        });
+        let (share, size) = found.map(|(a, b)| (Some(a), b)).unwrap_or((None, 0));
+        let high = if size > 0 { end.min(size) } else { end };
+        self.serving.lock().unwrap().insert(peer.to_string(), Serving { hash: hash.to_string(), share, size, high, at: now });
+    }
+
+    fn nearby_linked(&self, peer: &str, name: &str, dest: &str, sig: &str) {
+        // Both people confirmed and the signature checked out: stored exactly as a link made with a code is (the same
+        // add_peer, the Reticulum address learned the same way), and confirmed on both sides, since both were present.
+        add_peer(self, peer, name, false);
+        self.learn_rns(peer, &RnsProof { dest: dest.to_string(), sig: sig.to_string() });
+        self.note(format!("Linked with {name}"));
+        self.wake.notify_one();
+    }
+}
+
+impl Inner {
+    /// The iroh address this device puts in a short code's hello. With `<dir>/no-iroh-in-hello` present (test hook) it gives none,
+    /// so the other device can only reach it over Reticulum.
+    fn hello_iroh(&self, addr: EndpointAddr) -> Option<EndpointAddr> {
+        #[cfg(feature = "test-hooks")]
+        if self.dir.join("no-iroh-in-hello").exists() {
+            return None;
+        }
+        Some(addr)
+    }
+
+    /// The clock a short code runs on (tests move it on).
+    fn code_now(&self) -> u64 {
+        now_ms() + self.code_skew_ms.load(Ordering::Relaxed)
+    }
+
+    /// The name and kind this device gives a device that asks over Nearby.
+    fn nearby_self(&self) -> (String, Option<String>) {
+        (self.saved.lock().unwrap().name.clone(), self.device_kind.clone())
+    }
+
+    /// This device's Reticulum destination and signature, for what it sends other devices. With `<dir>/no-rns-fields` present
+    /// (test hook) it says nothing, like a build before Reticulum.
+    fn rns_info(&self) -> Option<(String, String)> {
+        #[cfg(feature = "test-hooks")]
+        if self.dir.join("no-rns-fields").exists() {
+            return None;
+        }
+        self.net.rns_info()
+    }
+
+    /// Stores the Reticulum address `proof` gives for the linked device `peer`, when the device's own signature is on it.
+    fn learn_rns(&self, peer: &str, proof: &RnsProof) {
+        if !self.net.learn_rns(peer, &proof.dest, &proof.sig) {
+            return;
+        }
+        let changed = {
+            let mut s = self.saved.lock().unwrap();
+            match s.peers.iter_mut().find(|p| p.id == peer) {
+                Some(p) if p.rns.as_ref().map(|x| x.dest.as_str()) != Some(proof.dest.as_str()) => {
+                    p.rns = Some(RnsPeer { dest: proof.dest.clone() });
+                    true
+                }
+                _ => false,
+            }
+        };
+        if changed {
+            let _ = self.save();
         }
     }
 }
@@ -2322,9 +4041,13 @@ fn add_peer(inner: &Inner, id: &str, name: &str, unconfirmed: bool) {
     {
         let mut s = inner.saved.lock().unwrap();
         s.peers.retain(|p| p.id != id);
-        s.peers.push(Peer { id: id.to_string(), name: name.to_string(), linked: now_ms(), link: Some(new_link()), last_seen: None, via: None, announced: Some(name.to_string()), unconfirmed });
+        // Linked again: an unlink offered before no longer holds.
+        s.removals.retain(|r| r.target != id);
+        s.former.retain(|f| f.id != id);
+        s.peers.push(Peer { id: id.to_string(), name: name.to_string(), linked: now_ms(), link: Some(new_link()), last_seen: None, via: None, announced: Some(name.to_string()), unconfirmed, rns: None });
     }
     inner.net.allow(id);
+    inner.push_former();
     let _ = inner.save();
 }
 
@@ -2352,10 +4075,24 @@ impl SyncEngine {
         let inner2 = inner.clone();
         let every = Duration::from_secs(cfg.interval_secs.unwrap_or(30).max(5));
         rt.spawn(async move {
+            // What woke the loop: a round asked for (the first, a change, Sync now, a device that asked) covers every device; the
+            // timer and a due device cover those that need a round ([`Inner::loop_scope`]).
+            let mut asked_for = true;
+            let mut first = true;
             loop {
                 if inner2.stop.load(Ordering::Relaxed) {
                     break;
                 }
+                let (scope, causes, asks) = if asked_for {
+                    inner2.due.lock().unwrap().clear();
+                    inner2.due_why.lock().unwrap().clear();
+                    let why = inner2.wake_why.lock().unwrap().take().unwrap_or_else(|| if first { "start".into() } else { "a change here".into() });
+                    (Scope::default(), vec![why], inner2.saved.lock().unwrap().peers.len())
+                } else {
+                    inner2.loop_scope()
+                };
+                first = false;
+                inner2.say_round(&causes, asks);
                 // The round runs as a task of its own: if it panics, only that round ends, and the next one comes after the usual
                 // wait (in the loop itself a panic would end every later round until the app is started again).
                 let inner3 = inner2.clone();
@@ -2369,7 +4106,11 @@ impl SyncEngine {
                             panic!("test: a round panicked");
                         }
                     }
-                    inner3.round().await
+                    if scope.whole() {
+                        inner3.round().await
+                    } else {
+                        inner3.round_with(&scope).await
+                    }
                 });
                 if let Err(e) = one.await {
                     if e.is_panic() {
@@ -2380,9 +4121,20 @@ impl SyncEngine {
                     }
                 }
                 let wait = if inner2.settle_again.swap(false, Ordering::Relaxed) { SETTLE + Duration::from_secs(1) } else { every };
-                let _ = tokio::time::timeout(wait, inner2.wake.notified()).await;
+                // Also never longer than the safety interval: which devices are quiet can change while the loop sleeps (a device that
+                // asks this one becomes quiet), and the safety round must not wait on a wake-up computed before that.
+                let wait = inner2.next_safety_in().map(|d| d.min(wait)).unwrap_or(wait).min(inner2.safety);
+                asked_for = tokio::select! {
+                    _ = tokio::time::sleep(wait) => false,
+                    _ = inner2.wake.notified() => true,
+                    _ = inner2.wake_due.notified() => false,
+                };
             }
         });
+        let inner5 = inner.clone();
+        rt.spawn(async move { inner5.notice_loop().await });
+        let inner6 = inner.clone();
+        rt.spawn(async move { inner6.resume_loop().await });
         if let Some(secs) = cfg.lifetime_secs {
             let inner4 = inner.clone();
             let net4 = inner.net.clone();
@@ -2453,11 +4205,24 @@ impl SyncEngine {
         if let Some(port) = cfg.port.filter(|p| *p != 0) {
             b = b.bind_addr(std::net::SocketAddr::from(([0, 0, 0, 0], port))).map_err(|e| anyhow!("{e}"))?;
         }
+        // This device's entry points, from their file (the network is told after it starts).
+        let entry_list = entries::tidied(entries::load(&cfg.dir), now_ms());
         let wanted: Arc<Mutex<HashSet<Hash>>> = Arc::default();
         // Hashes whose files in the store the iroh bridge reads (see `bridge`): the store never deletes or moves those.
         let lent: Arc<Mutex<HashSet<Hash>>> = Arc::default();
         let bridge = bridge::Bridge::new(cfg.dir.join("blobs-iroh-view"), wanted.clone(), lent.clone());
         let iroh_net = IrohTransport::bind(b, saved.peers.iter().map(|p| p.id.clone()), gate.clone(), bridge).await?;
+        // Reticulum beside iroh (Android, Linux and iOS), when asked: the saved links with the destination saved for each.
+        #[cfg(any(target_os = "linux", target_os = "android", target_os = "ios"))]
+        let multi = (cfg.reticulum != Reticulum::Off).then(|| {
+            rns_transport::MultiTransport::new(iroh_net.clone(), saved.peers.iter().map(|p| (p.id.clone(), p.rns.as_ref().map(|r| r.dest.clone()))))
+        });
+        #[cfg(any(target_os = "linux", target_os = "android", target_os = "ios"))]
+        let net: Arc<dyn Transport> = match &multi {
+            Some(m) => m.clone(),
+            None => iroh_net.clone(),
+        };
+        #[cfg(not(any(target_os = "linux", target_os = "android", target_os = "ios")))]
         let net: Arc<dyn Transport> = iroh_net.clone();
         steps.step("endpoint bound");
 
@@ -2483,12 +4248,16 @@ impl SyncEngine {
             saved: Mutex::new(saved),
             gate: gate.clone(),
             refused: Mutex::new(HashMap::new()),
+            refused_removals: Mutex::new(Default::default()),
             pairing: Mutex::new(None),
+            short: Mutex::new(None),
+            code_skew_ms: AtomicU64::new(0),
             run: Mutex::new(Run::default()),
             wanted,
             wake: Notify::new(),
             every: Duration::from_secs(cfg.interval_secs.unwrap_or(30).max(5)),
             asked_at: Mutex::new(HashMap::new()),
+            held_from: Mutex::new(HashMap::new()),
             network: AtomicBool::new(true),
             reserve: AtomicU64::new(cfg.reserve_bytes.unwrap_or(1024 * 1024 * 1024)),
             round: tokio::sync::Mutex::new(()),
@@ -2508,7 +4277,46 @@ impl SyncEngine {
             refetch: Mutex::new(HashMap::new()),
             with: Mutex::new(cfg.with.clone()),
             secrets: Mutex::new(HashMap::new()),
+            device_kind: cfg.device_kind.clone().filter(|k| matches!(k.as_str(), "phone" | "tablet" | "computer")),
             received: Mutex::new(HashMap::new()),
+            summary_peers: Mutex::new(HashSet::new()),
+            entries: Mutex::new(entry_list),
+            extra_entries: cfg.rns_interfaces.as_ref().map(|t| t.entries.clone()).unwrap_or_default(),
+            entries_seen: Mutex::new(HashMap::new()),
+            asked_entries: AtomicU64::new(0),
+            asked_summary: AtomicU64::new(0),
+            asked_diff: AtomicU64::new(0),
+            asked_full: AtomicU64::new(0),
+            safety: Duration::from_secs(cfg.safety_secs.unwrap_or(900).max(1)),
+            due: Mutex::new(HashSet::new()),
+            wake_due: Notify::new(),
+            due_why: Mutex::new(HashMap::new()),
+            wake_why: Mutex::new(None),
+            last_contact: Mutex::new(HashMap::new()),
+            notice_dirty: Mutex::new(HashSet::new()),
+            notice_wake: Notify::new(),
+            notice_out: Mutex::new(HashMap::new()),
+            notice_sent: AtomicU64::new(0),
+            notice_got: AtomicU64::new(0),
+            inline_ok: AtomicU64::new(0),
+            inline_bad: AtomicU64::new(0),
+            serving: Mutex::new(HashMap::new()),
+            heard_from: Mutex::new(HashSet::new()),
+            reach_pending: Mutex::new(HashMap::new()),
+            waiting: Mutex::new(BTreeMap::new()),
+            waiting_cap: Mutex::new(BTreeSet::new()),
+            refused_cap: AtomicU64::new(0),
+            resume_check: Duration::from_millis(cfg.resume_check_ms.unwrap_or(5_000).max(50)),
+            resume_hold: Duration::from_millis(cfg.resume_hold_ms.unwrap_or(30_000)),
+            resume_since: Mutex::new(HashMap::new()),
+            resume_cap: Duration::from_millis(cfg.resume_backoff_max_ms.unwrap_or(600_000)),
+            resume_cancels: Mutex::new(HashMap::new()),
+            resume_trial: Mutex::new(HashSet::new()),
+            resume_gen: Mutex::new(HashMap::new()),
+            #[cfg(feature = "test-hooks")]
+            resume_fires: Mutex::new(Vec::new()),
+            bulk: cfg.bulk.iter().cloned().collect(),
+            medium_page: cfg.medium_page_bytes.unwrap_or(transport::MEDIUM_PAGE_BYTES).max(512),
             store_ready: AtomicBool::new(false),
             store_move: Mutex::new(None),
         });
@@ -2516,6 +4324,23 @@ impl SyncEngine {
         steps.step("state saved");
         // From here the links are loaded and written: the Gate may answer "not linked" (when the grace allows it).
         gate.ready.store(true, Ordering::SeqCst);
+        #[cfg(any(target_os = "linux", target_os = "android", target_os = "ios"))]
+        if let Some(m) = &multi {
+            // After the store has opened: the node serves from it. Without Reticulum the device carries on over iroh alone.
+            let ifaces = rns_ifaces(&cfg, &inner.entries.lock().unwrap().iter().filter(|r| !r.removed).map(|r| r.point()).collect::<Vec<_>>());
+            let pair_local_tcp = cfg.rns_interfaces.as_ref().is_some_and(|t| t.pair_local_tcp);
+            inner.push_former();
+            #[cfg(feature = "test-hooks")]
+            if let Some(ms) = std::fs::read_to_string(cfg.dir.join("reach-gap-ms")).ok().and_then(|v| v.trim().parse::<u64>().ok()) {
+                m.set_reach_gap(Duration::from_millis(ms));
+            }
+            if let Some(ms) = cfg.speed_probe_ms {
+                m.set_probe_every(Duration::from_millis(ms));
+            }
+            if let Err(e) = m.start_rns(secret.clone(), inner.store.raw(), inner.clone(), ifaces, pair_local_tcp).await {
+                inner.note(format!("Reticulum did not start: {e:#}"));
+            }
+        }
         // An older (iroh-blobs) store is moved into the new one first, in the background; rounds and serving wait for it.
         let old_dir = cfg.dir.join("blobs");
         if Store::has_old_store(&old_dir) {
@@ -2566,38 +4391,187 @@ impl SyncEngine {
         Ok(inner)
     }
 
+    /// Entering a short code: a path request to its destination, a link, and the pairing request with the secret and this
+    /// device's hello; the shower's hello comes back and is checked the same way.
+    fn link_short(&self, dest: [u8; 16], secret: [u8; 5]) -> Result<Value> {
+        let inner = &self.inner;
+        let dest_hex = dest_hex_of(&dest);
+        let Some((my_dest, my_sig)) = inner.rns_info() else { bail!(transport::NO_REACH) };
+        if my_dest == dest_hex {
+            bail!("that is this device's own code");
+        }
+        let name = inner.saved.lock().unwrap().name.clone();
+        let net = inner.net.clone();
+        let me = net.id();
+        let to = dest_hex.clone();
+        let inner2 = inner.clone();
+        let reply: Result<Value> = self.rt.block_on(async move {
+            let iroh = inner2.hello_iroh(net.link_addr().await.0);
+            let body = ShortPair {
+                secret: data_encoding::BASE32_NOPAD.encode(&secret),
+                hello: ShortHello { key: me, iroh, name, rns: RnsProof { dest: my_dest, sig: my_sig } },
+            };
+            let bytes = net.pair_short(&to, serde_json::to_vec(&body)?).await?;
+            Ok(serde_json::from_slice(&bytes)?)
+        });
+        let reply = reply?;
+        if reply.get("ok").and_then(|v| v.as_bool()) != Some(true) {
+            bail!("{}", reply.get("error").and_then(|v| v.as_str()).unwrap_or("the other device refused the link"));
+        }
+        let hello: ShortHello = serde_json::from_value(reply.get("hello").cloned().unwrap_or(Value::Null)).map_err(|_| anyhow!("the other device's answer could not be read"))?;
+        // Its hello must be signed by the key it names, over the destination the code named.
+        if hello.rns.dest.to_lowercase() != dest_hex || !inner.net.verify_rns(&hello.key, &hello.rns.dest, &hello.rns.sig) {
+            bail!("the other device's answer did not check out");
+        }
+        if hello.key == inner.me {
+            bail!("that is this device's own code");
+        }
+        if let Some(a) = hello.iroh.clone() {
+            inner.net.learn_iroh(a);
+        }
+        add_peer(inner, &hello.key, &hello.name, false);
+        inner.learn_rns(&hello.key, &hello.rns);
+        inner.note(format!("Linked with {}", hello.name));
+        inner.wake.notify_one();
+        Ok(json!({"ok": true, "peer": hello.key, "name": hello.name}))
+    }
+
     /// The whole interface: `method` with JSON `args`, a JSON answer. Errors come back as `{"error": "..."}` from the C ABI.
     pub fn call(&self, method: &str, args: &Value) -> Result<Value> {
         let inner = &self.inner;
         let s = |k: &str| args.get(k).and_then(|v| v.as_str()).map(|s| s.to_string());
         match method {
             "status" => Ok(self.status()),
+            "bluetooth_start" => Ok(json!({"ok": true, "handle": inner.net.bluetooth_start()?})),
+            "bluetooth_stop" => {
+                inner.net.bluetooth_stop();
+                Ok(json!({"ok": true}))
+            }
+            "bluetooth_status" => Ok(json!({"handle": inner.net.bluetooth_handle(), "peers": inner.net.bluetooth_peers(),
+                "ready": inner.net.bluetooth_ready(), "error": inner.net.bluetooth_error()})),
             "set_name" => {
                 let name = s("name").filter(|n| !n.trim().is_empty()).ok_or_else(|| anyhow!("name is required"))?;
                 inner.saved.lock().unwrap().name = name.trim().to_string();
                 inner.save()?;
                 Ok(json!({"ok": true}))
             }
+            "link_code" if inner.rns_info().is_some() => {
+                // The short code: this device's Reticulum destination and a one-time secret. Where iroh finds this device, its
+                // name and its signature travel inside the pairing, never in the code.
+                let (dest, _) = inner.rns_info().ok_or_else(|| anyhow!("Reticulum is not running"))?;
+                let dest = rns_dest_bytes(&dest).ok_or_else(|| anyhow!("bad Reticulum destination"))?;
+                let secret: [u8; 5] = rand::Rng::random(&mut rand::rng());
+                *inner.pairing.lock().unwrap() = None;
+                *inner.short.lock().unwrap() = Some(ShortCode { secret, expires_ms: inner.code_now() + LINK_WINDOW.as_millis() as u64, strikes: 0 });
+                Ok(json!({"code": encode_short(&dest, &secret), "valid_secs": LINK_WINDOW.as_secs()}))
+            }
+            #[cfg(feature = "test-hooks")]
+            "test_round" => {
+                // One whole round now, and back when it is over.
+                let inner2 = inner.clone();
+                let scope = Scope { peer: s("peer"), ..Scope::default() };
+                self.rt.block_on(async move { inner2.round_with(&scope).await });
+                Ok(json!({}))
+            }
+            #[cfg(feature = "test-hooks")]
+            "test_view" => {
+                // What `peer` gets as this device's whole file list (today's request), without counters on its entries.
+                let peer = s("peer").ok_or_else(|| anyhow!("peer is required"))?;
+                Ok(serde_json::to_value(inner.our_index_for(&peer))?)
+            }
+            #[cfg(feature = "test-hooks")]
+            "test_mirror" => {
+                let (peer, share) = (s("peer").ok_or_else(|| anyhow!("peer is required"))?, s("share").ok_or_else(|| anyhow!("share is required"))?);
+                Ok(serde_json::to_value(inner.load_mirror(&peer, &share))?)
+            }
+            #[cfg(feature = "test-hooks")]
+            "test_asked" => Ok(json!({
+                "summary": inner.asked_summary.load(Ordering::Relaxed),
+                "diff": inner.asked_diff.load(Ordering::Relaxed),
+                "full": inner.asked_full.load(Ordering::Relaxed),
+                "notice_sent": inner.notice_sent.load(Ordering::Relaxed),
+                "notice_got": inner.notice_got.load(Ordering::Relaxed),
+                "entries": inner.asked_entries.load(Ordering::Relaxed),
+                "refused_cap": inner.refused_cap.load(Ordering::Relaxed),
+                "inline_ok": inner.inline_ok.load(Ordering::Relaxed),
+                "inline_bad": inner.inline_bad.load(Ordering::Relaxed),
+            })),
+            #[cfg(feature = "test-hooks")]
+            "test_resume" => {
+                // The resume watcher: when it started rounds (ms since 1970), and the hold it now waits for `peer`.
+                let peer = s("peer").unwrap_or_default();
+                let fires = inner.resume_fires.lock().unwrap().clone();
+                Ok(json!({"fires": fires.iter().map(|f| f.0).collect::<Vec<_>>(), "why": fires.iter().map(|f| f.1).collect::<Vec<_>>(), "cancels": fires.iter().map(|f| f.2).collect::<Vec<_>>(), "hold_ms": inner.resume_hold_for(&peer).as_millis() as u64}))
+            }
+            #[cfg(feature = "test-hooks")]
+            "test_relink" => {
+                // The link to `peer` drops; the next request makes a new one.
+                inner.net.test_relink(&s("peer").ok_or_else(|| anyhow!("peer is required"))?);
+                Ok(json!({}))
+            }
+            #[cfg(feature = "test-hooks")]
+            "test_attach_iface" => {
+                inner.net.test_attach_iface();
+                Ok(json!({}))
+            }
+            #[cfg(feature = "test-hooks")]
+            "test_route_hops" => {
+                // The hops the routing table gives for a Reticulum destination (hex); null when there is no route.
+                let dest = s("dest").ok_or_else(|| anyhow!("dest is required"))?;
+                let net = inner.net.clone();
+                Ok(json!({"hops": self.rt.block_on(async move { net.test_route_hops(&dest).await })}))
+            }
+            #[cfg(feature = "test-hooks")]
+            "test_quiet" => {
+                let peer = s("peer").ok_or_else(|| anyhow!("peer is required"))?;
+                Ok(json!({"quiet": inner.quiet_peer(&peer)}))
+            }
+            #[cfg(feature = "test-hooks")]
+            "test_ask" => {
+                // `peer` asked for this device's list: whether that woke a round (the rate limit counts as it does for a real ask).
+                let peer = s("peer").ok_or_else(|| anyhow!("peer is required"))?;
+                Ok(json!({"wakes": inner.asked_wakes(&peer)}))
+            }
+            #[cfg(feature = "test-hooks")]
+            "test_skew_code_clock" => {
+                inner.code_skew_ms.store(args.get("ms").and_then(|v| v.as_u64()).unwrap_or(0), Ordering::Relaxed);
+                Ok(json!({}))
+            }
+            #[cfg(feature = "test-hooks")]
+            "test_pair_short_raw" => {
+                // A short pairing request as written by the caller (to try what a real device would not send).
+                let body = serde_json::to_vec(args.get("body").unwrap_or(&Value::Null))?;
+                let inner2 = inner.clone();
+                let reply = self.rt.block_on(async move { Serve::pair_short(inner2, body).await });
+                Ok(serde_json::from_slice(&reply)?)
+            }
             "link_code" => {
+                *inner.short.lock().unwrap() = None;
                 let tok = token();
                 *inner.pairing.lock().unwrap() = Some((tok.clone(), Instant::now() + LINK_WINDOW));
                 let net = inner.net.clone();
-                let addr = self.rt.block_on(async move { net.link_addr().await });
-                let code = encode_code(&LinkCode { a: addr, t: tok, n: inner.saved.lock().unwrap().name.clone() })?;
+                let (addr, rns) = self.rt.block_on(async move { net.link_addr().await });
+                let code = encode_code(&LinkCode { a: addr, t: tok, n: inner.saved.lock().unwrap().name.clone(), r: rns.filter(|_| inner.rns_info().is_some()).map(|d| RnsCode { d }) })?;
                 Ok(json!({"code": code, "valid_secs": LINK_WINDOW.as_secs()}))
             }
             "link" => {
-                let code = decode_code(&s("code").ok_or_else(|| anyhow!("code is required"))?)?;
+                let code = match decode_any(&s("code").ok_or_else(|| anyhow!("code is required"))?)? {
+                    Code::Old(c) => c,
+                    Code::Short { dest, secret } => return self.link_short(dest, secret),
+                };
                 if code.a.id.to_string() == inner.net.id() {
                     bail!("that is this device's own code");
                 }
                 let name = inner.saved.lock().unwrap().name.clone();
                 let net = inner.net.clone();
+                let inner2 = inner.clone();
                 let peer = code.a.id;
                 // Allowed before connecting: the reply comes back on our own connection, and from now on it may connect to us.
                 inner.net.allow(&peer.to_string());
                 let reply: Result<Value> = self.rt.block_on(async move {
-                    let bytes = net.pair(code.a, serde_json::to_vec(&PairHello { token: code.t, name })?).await?;
+                    let rns = inner2.rns_info().map(|(dest, sig)| RnsProof { dest, sig });
+                    let hello = PairHello { token: code.t, name, key: Some(net.id()), rns };
+                    let bytes = net.pair(PairTarget { iroh: code.a, rns: code.r.map(|r| r.d) }, serde_json::to_vec(&hello)?).await?;
                     Ok(serde_json::from_slice(&bytes)?)
                 });
                 let reply = match reply {
@@ -2618,13 +4592,49 @@ impl SyncEngine {
                 }
                 let pname = reply.get("name").and_then(|v| v.as_str()).unwrap_or(&code.n).to_string();
                 add_peer(inner, &peer.to_string(), &pname, false);
+                if let Some(r) = reply.get("rns").and_then(|v| serde_json::from_value::<RnsProof>(v.clone()).ok()) {
+                    inner.learn_rns(&peer.to_string(), &r);
+                }
                 inner.note(format!("Linked with {pname}"));
                 inner.wake.notify_one();
                 Ok(json!({"ok": true, "peer": peer.to_string(), "name": pname}))
             }
+            // Nearby linking (Android, Linux and iOS, with Reticulum on): the app drives it with these five calls and polls the
+            // list and the state while its link-code page is open.
+            "pairing_open" => {
+                let (name, kind) = inner.nearby_self();
+                let net = inner.net.clone();
+                self.rt.block_on(async move { net.pairing_open(name, kind).await })?;
+                Ok(json!({}))
+            }
+            #[cfg(feature = "test-hooks")]
+            "test_skew_clock" => {
+                inner.net.skew_clock(args.get("ms").and_then(|v| v.as_u64()).unwrap_or(0));
+                Ok(json!({}))
+            }
+            "pairing_close" => {
+                let net = inner.net.clone();
+                self.rt.block_on(async move { net.pairing_close().await });
+                Ok(json!({}))
+            }
+            "nearby_list" => Ok(inner.net.nearby_list()),
+            "nearby_state" => Ok(inner.net.nearby_state()),
+            "nearby_link" => {
+                let id = s("id").ok_or_else(|| anyhow!("id is required"))?;
+                let (name, kind) = inner.nearby_self();
+                let net = inner.net.clone();
+                self.rt.block_on(async move { net.nearby_link(id, name, kind).await })?;
+                Ok(json!({}))
+            }
+            "nearby_answer" => {
+                let ok = args.get("ok").and_then(|v| v.as_bool()).ok_or_else(|| anyhow!("ok is required"))?;
+                let net = inner.net.clone();
+                self.rt.block_on(async move { net.nearby_answer(ok).await })?;
+                Ok(json!({}))
+            }
             "unlink" => {
                 let id = s("peer").ok_or_else(|| anyhow!("peer is required"))?;
-                inner.remove_peer(&id)?;
+                inner.remove_device(&id)?;
                 Ok(json!({"ok": true}))
             }
             "set_link" => {
@@ -2817,9 +4827,9 @@ impl SyncEngine {
                         Some(_) => bail!("{k} must be a list"),
                     }
                 };
-                let scope = Scope { peer: s("peer"), shares: list("shares")?.or_else(|| s("share").map(|x| vec![x])), paths: list("paths")? };
+                let scope = Scope { peer: s("peer"), shares: list("shares")?.or_else(|| s("share").map(|x| vec![x])), paths: list("paths")?, ..Scope::default() };
                 if scope.whole() {
-                    inner.wake.notify_one();
+                    inner.wake_for("Sync now");
                     return Ok(json!({"ok": true}));
                 }
                 {
@@ -2835,6 +4845,8 @@ impl SyncEngine {
                         }
                     }
                 }
+                let asks = if scope.peer.is_some() { 1 } else { inner.saved.lock().unwrap().peers.len() };
+                inner.say_round(&["Sync now".to_string()], asks);
                 let inner2 = inner.clone();
                 self.rt.spawn(async move { inner2.round_with(&scope).await });
                 Ok(json!({"ok": true}))
@@ -2952,9 +4964,130 @@ impl SyncEngine {
                 inner.save()?;
                 Ok(json!({"ok": true}))
             }
+            "entry_points" => {
+                // The entry points (the rnsds the person entered), each with where it stands now. Never the passphrase: only whether
+                // there is one.
+                let status: HashMap<String, (&'static str, u64)> = inner.net.entry_status().into_iter().map(|e| (e.id, (e.state, e.checked))).collect();
+                let mut list: Vec<entries::Record> = inner.entries.lock().unwrap().iter().filter(|r| !r.removed).cloned().collect();
+                list.sort_by(|a, b| (a.host.to_lowercase(), a.port, &a.id).cmp(&(b.host.to_lowercase(), b.port, &b.id)));
+                let out: Vec<Value> = list
+                    .iter()
+                    .map(|r| {
+                        let (state, checked) = match (r.on, status.get(&r.id)) {
+                            (false, _) => ("off", now_ms()),
+                            (true, Some(s)) => *s,
+                            (true, None) => ("not_running", now_ms()),
+                        };
+                        json!({
+                            "id": r.id, "host": r.host, "port": r.port, "private": r.private, "network_name": r.network_name,
+                            "has_passphrase": r.passphrase.is_some(), "on": r.on, "cap_bytes": r.cap_bytes, "t": r.t, "dev": r.dev,
+                            "status": state, "checked": checked,
+                        })
+                    })
+                    .collect();
+                Ok(json!({"entries": out}))
+            }
+            "entry_point_set" => {
+                // Adds an entry point (no `id`), or edits one (its `id`). Every field may be given; one left out stays as it was (a new
+                // entry: on, no name, no passphrase, the default cap). A passphrase left out keeps the one saved.
+                let id = s("id");
+                let me = inner.me.clone();
+                let id = inner.change_entries(|list| {
+                    let have = match &id {
+                        Some(i) => Some(list.iter().find(|r| r.id == *i && !r.removed).cloned().ok_or_else(|| anyhow!("There is no such entry point."))?),
+                        None => None,
+                    };
+                    let text = |k: &str| -> Result<Option<Option<String>>> {
+                        match args.get(k) {
+                            None | Some(Value::Null) => Ok(None),
+                            Some(Value::String(v)) => Ok(Some(Some(v.clone()).filter(|v| !v.is_empty()))),
+                            Some(_) => bail!("{k} must be text"),
+                        }
+                    };
+                    let host = match args.get("host") {
+                        None | Some(Value::Null) => have.as_ref().map(|h| h.host.clone()).unwrap_or_default(),
+                        Some(Value::String(h)) => h.trim().to_string(),
+                        Some(_) => bail!("host must be text"),
+                    };
+                    let port: u32 = match args.get("port") {
+                        None | Some(Value::Null) => have.as_ref().map(|h| h.port as u32).unwrap_or(0),
+                        Some(v) => v.as_u64().map(|n| n.min(u32::MAX as u64) as u32).ok_or_else(|| anyhow!("The port has to be a number from 1 to 65535."))?,
+                    };
+                    let private = match args.get("private") {
+                        None | Some(Value::Null) => have.as_ref().is_some_and(|h| h.private),
+                        Some(Value::Bool(b)) => *b,
+                        Some(_) => bail!("private must be true or false"),
+                    };
+                    let name = text("network_name")?.unwrap_or_else(|| have.as_ref().and_then(|h| h.network_name.clone()));
+                    let pass = text("passphrase")?.unwrap_or_else(|| have.as_ref().and_then(|h| h.passphrase.clone()));
+                    let (name, pass) = if private { (name, pass) } else { (None, None) };
+                    entries::validate(&host, port, private, name.as_deref(), pass.as_deref()).map_err(|e| anyhow!(e))?;
+                    let on = match args.get("on") {
+                        None | Some(Value::Null) => have.as_ref().is_none_or(|h| h.on),
+                        Some(Value::Bool(b)) => *b,
+                        Some(_) => bail!("on must be true or false"),
+                    };
+                    let cap_bytes = match args.get("cap_bytes") {
+                        None | Some(Value::Null) => have.as_ref().map(|h| h.cap_bytes).unwrap_or(entries::DEFAULT_CAP_BYTES),
+                        Some(v) => v.as_u64().filter(|n| *n > 0).ok_or_else(|| anyhow!("The file limit has to be a number of bytes above zero."))?,
+                    };
+                    let new_id = have.as_ref().map(|h| h.id.clone()).unwrap_or_else(entries::new_id);
+                    let same = |r: &entries::Record| !r.removed && r.id != new_id && r.port as u32 == port && r.host.eq_ignore_ascii_case(&host);
+                    if list.iter().any(same) {
+                        bail!("That entry point is already in your list.");
+                    }
+                    // Later than anything this id has had here, so the change always wins over the one it follows.
+                    let t = list.iter().find(|r| r.id == new_id).map(|r| r.t + 1).unwrap_or(0).max(now_ms());
+                    let rec = entries::Record { id: new_id.clone(), removed: false, host, port: port as u16, private, network_name: name, passphrase: pass, on, cap_bytes, t, dev: me };
+                    list.retain(|r| r.id != new_id);
+                    list.push(rec);
+                    Ok(new_id)
+                })?;
+                Ok(json!({"ok": true, "id": id}))
+            }
+            "entry_point_on" => {
+                let id = s("id").ok_or_else(|| anyhow!("id is required"))?;
+                let on = args.get("on").and_then(|v| v.as_bool()).ok_or_else(|| anyhow!("on is required"))?;
+                let me = inner.me.clone();
+                inner.change_entries(|list| {
+                    let r = list.iter_mut().find(|r| r.id == id && !r.removed).ok_or_else(|| anyhow!("There is no such entry point."))?;
+                    if r.on != on {
+                        r.on = on;
+                        r.t = (r.t + 1).max(now_ms());
+                        r.dev = me;
+                    }
+                    Ok(())
+                })?;
+                Ok(json!({"ok": true}))
+            }
+            "entry_point_remove" => {
+                // A removal is kept (60 days) so the devices that were away learn of it.
+                let id = s("id").ok_or_else(|| anyhow!("id is required"))?;
+                let me = inner.me.clone();
+                inner.change_entries(|list| {
+                    let r = list.iter_mut().find(|r| r.id == id && !r.removed).ok_or_else(|| anyhow!("There is no such entry point."))?;
+                    *r = entries::Record::tombstone(&id, (r.t + 1).max(now_ms()), &me);
+                    Ok(())
+                })?;
+                Ok(json!({"ok": true}))
+            }
+            #[cfg(feature = "test-hooks")]
+            "test_answer_entries" => {
+                // What this device answers when `peer` asks for its entry points.
+                let peer = s("peer").ok_or_else(|| anyhow!("peer is required"))?;
+                let inner2 = inner.clone();
+                let reply = self.rt.block_on(async move { Serve::answer(inner2, peer, Ask::Entries).await });
+                Ok(match serde_json::from_slice::<Value>(&reply) {
+                    Ok(list) => json!({"refused": false, "list": list}),
+                    Err(_) => json!({"refused": true}),
+                })
+            }
             "set_policy" => {
                 if let Some(n) = args.get("network").and_then(|v| v.as_bool()) {
                     inner.network.store(n, Ordering::Relaxed);
+                }
+                if let Some(ip) = args.get("ip_network").and_then(|v| v.as_bool()) {
+                    self.rt.block_on(inner.net.set_ip_allowed(ip))?;
                 }
                 if let Some(r) = args.get("reserve_bytes").and_then(|v| v.as_u64()) {
                     inner.reserve.store(r, Ordering::Relaxed);
@@ -3001,6 +5134,9 @@ impl SyncEngine {
                     "link": p.link.as_ref().map(|l| l.v.clone()), "link_t": p.link.as_ref().map(|l| l.t),
                     "link_known": st.index.as_ref().map(|i| i.links).unwrap_or(false),
                     "unconfirmed": p.unconfirmed,
+                    "fetching": inner.fetching_by(&p.id, st.index.as_ref(), st.last_seen),
+                    // How the link to it is judged now (fast, medium or slow); iroh paths are fast.
+                    "speed": inner.net.speed(&p.id).as_str(),
                 })
             })
             .collect();
@@ -3037,6 +5173,23 @@ impl SyncEngine {
                 })
             })
             .collect();
+        // What a link's class holds back (engine field only; the wording on the device row is part 4): files and whole lists.
+        let waiting_cap = inner.waiting_cap.lock().unwrap().clone();
+        let waiting: Vec<Value> = inner
+            .waiting
+            .lock()
+            .unwrap()
+            .iter()
+            .map(|((peer, share, path), size)| {
+                let reason = if waiting_cap.contains(&(peer.clone(), share.clone(), path.clone())) { WAITING_FOR_WIFI } else { WAITING_FOR_FASTER };
+                let peer_name = saved.peers.iter().find(|p| p.id == *peer).map(|p| p.name.clone());
+                let share_name = saved.shares.iter().find(|s| s.id == *share).map(|s| s.name.clone());
+                json!({
+                    "peer": peer, "peer_name": peer_name, "share_id": share, "share": share_name, "path": path,
+                    "what": if path.is_empty() { "list" } else { "file" }, "size": size, "reason": reason,
+                })
+            })
+            .collect();
         let (relay, direct) = inner.net.addresses();
         json!({
             "id": inner.me,
@@ -3044,13 +5197,18 @@ impl SyncEngine {
             "relay": relay,
             "direct": direct,
             "network": inner.network.load(Ordering::Relaxed),
+            "ip_network": inner.net.ip_allowed(),
             "reserve_bytes": inner.reserve.load(Ordering::Relaxed),
             "free_bytes": Inner::free_bytes(&inner.dir),
-            "showing_code": inner.pairing.lock().unwrap().as_ref().map(|(_, until)| until.saturating_duration_since(Instant::now()).as_secs()),
+            "showing_code": inner.pairing.lock().unwrap().as_ref().map(|(_, until)| until.saturating_duration_since(Instant::now()).as_secs()).or_else(|| {
+                let now = inner.code_now();
+                inner.short.lock().unwrap().as_ref().filter(|c| c.expires_ms > now).map(|c| (c.expires_ms - now) / 1000)
+            }),
             "peers": peers,
             "shares": shares,
             "offers": offers,
             "transfer": run.transfer,
+            "waiting": waiting,
             "paused": run.paused,
             "store_move": inner.store_move.lock().unwrap().map(|(done, total)| json!({"done": done, "total": total})),
             "rounds": run.rounds,
@@ -3069,6 +5227,7 @@ impl SyncEngine {
     pub fn close(self) {
         self.inner.stop.store(true, Ordering::Relaxed);
         self.inner.wake.notify_one();
+        self.inner.notice_wake.notify_one();
         let net = self.inner.net.clone();
         let store = self.inner.store.clone();
         self.rt.block_on(async move {
@@ -3078,6 +5237,25 @@ impl SyncEngine {
     }
 }
 
+
+#[cfg(test)]
+mod resume_backoff_tests {
+    use super::*;
+
+    const S: fn(u64) -> Duration = Duration::from_secs;
+
+    /// The test clock is the schedule itself: each retry's gap is the hold after the slow cancels so far (the real constants: a 30 s
+    /// hold and a 5 s look, so the gaps are about 35 s, 65 s, 125 s ... up to 10 min and a look).
+    #[test]
+    fn the_hold_doubles_with_each_slow_cancel_and_stops_at_the_cap() {
+        let holds: Vec<Duration> = (0..8).map(|n| backoff_hold(S(30), n, S(600))).collect();
+        assert_eq!(holds, [S(30), S(60), S(120), S(240), S(480), S(600), S(600), S(600)]);
+        // No overflow however many in a row, and a base over the cap is held to it.
+        assert_eq!(backoff_hold(S(30), 1000, S(600)), S(600));
+        assert_eq!(backoff_hold(S(30), u32::MAX, S(600)), S(600));
+        assert_eq!(backoff_hold(S(900), 0, S(600)), S(600));
+    }
+}
 
 #[cfg(test)]
 mod space_tests {
@@ -3172,7 +5350,7 @@ mod peer_tests {
     use super::*;
 
     fn peer() -> Peer {
-        Peer { id: "p".into(), name: "Android device".into(), linked: 1, link: None, last_seen: None, via: None, announced: Some("Android device".into()), unconfirmed: false }
+        Peer { id: "p".into(), name: "Android device".into(), linked: 1, link: None, last_seen: None, via: None, announced: Some("Android device".into()), unconfirmed: false, rns: None }
     }
 
     #[test]
@@ -3339,10 +5517,133 @@ mod link_code_tests {
 
     #[test]
     fn a_real_code_still_decodes() {
-        let c = LinkCode { a: EndpointAddr::new(iroh::SecretKey::from_bytes(&[7; 32]).public()), t: "TOK".into(), n: "Desk".into() };
+        let c = LinkCode { a: EndpointAddr::new(iroh::SecretKey::from_bytes(&[7; 32]).public()), t: "TOK".into(), n: "Desk".into(), r: None };
         let code = encode_code(&c).unwrap();
         assert!(code.starts_with("CACHE1-"));
         let back = decode_code(&format!("  {} ", code.to_lowercase())).unwrap();
         assert_eq!((back.t, back.n, back.a.id), ("TOK".to_string(), "Desk".to_string(), c.a.id));
+    }
+}
+
+#[cfg(test)]
+mod short_code_tests {
+    use super::*;
+
+    #[test]
+    fn a_short_code_reads_back_with_any_spelling() {
+        let (dest, secret) = ([0xA5u8; 16], [1u8, 2, 3, 4, 5]);
+        let code = encode_short(&dest, &secret);
+        assert!(code.starts_with("CACHE-"));
+        assert_eq!(code.matches('-').count(), 9);
+        assert_eq!(code.replace('-', "").len(), "CACHE".len() + SHORT_LEN);
+        for s in [code.clone(), code.to_lowercase(), format!("  {} ", code.replace('-', " ")), code.replace("CACHE-", "CACHE"), code.replace('-', "")] {
+            match decode_any(&s).unwrap() {
+                Code::Short { dest: d, secret: k } => assert_eq!((d, k), (dest, secret), "{s}"),
+                c => panic!("{s}: {c:?}"),
+            }
+        }
+    }
+
+    #[test]
+    fn a_short_code_of_the_wrong_length_or_alphabet_is_not_a_code() {
+        let code = encode_short(&[9; 16], &[7; 5]);
+        for s in [code[..code.len() - 1].to_string(), format!("{code}A"), format!("CACHE-1{}", &code[7..]), "CACHE-".to_string(), "CACHE-!!!!".to_string()] {
+            assert_eq!(decode_any(&s).err().as_ref().and_then(error_kind), Some("link_code_not_a_code"), "{s}");
+        }
+    }
+
+    #[test]
+    fn old_and_newer_codes_are_still_told_apart() {
+        let c = LinkCode { a: EndpointAddr::new(iroh::SecretKey::from_bytes(&[7; 32]).public()), t: "TOK".into(), n: "Desk".into(), r: None };
+        assert!(matches!(decode_any(&encode_code(&c).unwrap()).unwrap(), Code::Old(_)));
+        assert_eq!(decode_any("CACHE2-ABC").err().as_ref().and_then(error_kind), Some("link_code_newer"));
+        assert_eq!(decode_any("CACHE1-!!!").err().as_ref().and_then(error_kind), Some("link_code_damaged"));
+        assert_eq!(decode_any("HELLO").err().as_ref().and_then(error_kind), Some("link_code_not_a_code"));
+    }
+
+    #[test]
+    fn the_secret_compare() {
+        assert!(ct_eq(&[1, 2, 3, 4, 5], &[1, 2, 3, 4, 5]));
+        assert!(!ct_eq(&[1, 2, 3, 4, 5], &[1, 2, 3, 4, 6]));
+        assert!(!ct_eq(&[1, 2, 3, 4, 5], &[1, 2, 3, 4]));
+    }
+}
+
+#[cfg(test)]
+mod former_tests {
+    use super::*;
+
+    #[test]
+    fn a_closed_link_line_names_the_device_the_reason_and_what_is_known() {
+        assert_eq!(
+            link_closed_line("Pixel", "timeout (nothing heard on it for too long)", Some(44), Some(90)),
+            "reticulum link to Pixel closed: timeout (nothing heard on it for too long) after 44 s (rtt 90 ms)"
+        );
+        assert_eq!(link_closed_line("Pixel", "closed by the other device", None, None), "reticulum link to Pixel closed: closed by the other device");
+    }
+
+    #[test]
+    fn a_route_move_line_names_the_device_both_routes_and_what_taught_it() {
+        assert_eq!(
+            route_moved_line("Pixel", "rns2.example.org:4242", "rns1.example.org:4242", "an announce"),
+            "reticulum route to Pixel now through rns2.example.org:4242 (was rns1.example.org:4242), from an announce"
+        );
+        assert_eq!(
+            route_moved_line("Pixel", "Wi-Fi", "other", "a path response"),
+            "reticulum route to Pixel now through Wi-Fi (was other), from a path response"
+        );
+    }
+
+    #[test]
+    fn a_saved_file_without_former_devices_loads_and_does_not_write_the_field() {
+        let old = r#"{"name":"Desk","peers":[],"shares":[]}"#;
+        let s: Saved = serde_json::from_str(old).unwrap();
+        assert!(s.former.is_empty());
+        assert!(!serde_json::to_string(&s).unwrap().contains("former"));
+        let with: Saved = serde_json::from_str(r#"{"name":"Desk","former":[{"id":"x","t":5}]}"#).unwrap();
+        assert_eq!(with.former.len(), 1);
+    }
+
+    #[cfg(any(target_os = "linux", target_os = "android", target_os = "ios"))]
+    fn plan_entry(id: &str, on: bool) -> entries::EntryPoint {
+        entries::EntryPoint { id: id.into(), host: "rt.example.net".into(), port: 4965, network_name: None, passphrase: None, on, cap_bytes: entries::DEFAULT_CAP_BYTES }
+    }
+
+    /// The background mode (`"reticulum": "entries"`) starts the entry points that are on and no Wi-Fi auto (the background service
+    /// holds no multicast lock); the plain mode keeps Wi-Fi auto beside them; the test block still replaces Wi-Fi auto.
+    #[cfg(any(target_os = "linux", target_os = "android", target_os = "ios"))]
+    #[test]
+    fn the_entries_mode_has_the_entries_that_are_on_and_no_wifi_auto() {
+        let cfg = |v: Value| -> Config { serde_json::from_value(json!({"dir": "/x", "reticulum": v})).unwrap() };
+        let list = [plan_entry("aa", true), plan_entry("bb", false)];
+        let wifi = |p: &[cache_rns::Iface]| p.iter().filter(|i| matches!(i, cache_rns::Iface::WifiAuto)).count();
+        let ents = |p: &[cache_rns::Iface]| p.iter().filter(|i| matches!(i, cache_rns::Iface::Entry(_))).count();
+        let p = rns_ifaces(&cfg(json!("entries")), &list);
+        assert_eq!((wifi(&p), ents(&p)), (0, 1), "{p:?}");
+        let p = rns_ifaces(&cfg(json!(true)), &list);
+        assert_eq!((wifi(&p), ents(&p)), (1, 1), "{p:?}");
+        let mut with_block = cfg(json!(true));
+        with_block.rns_interfaces = Some(RnsInterfaces { tcp_connect: Some("127.0.0.1:1".into()), ..RnsInterfaces::default() });
+        let p = rns_ifaces(&with_block, &list);
+        assert_eq!((wifi(&p), ents(&p)), (0, 1), "{p:?}");
+        // The test block's own entries come with the file's.
+        with_block.rns_interfaces = Some(RnsInterfaces { entries: vec![plan_entry("cc", true)], ..RnsInterfaces::default() });
+        assert_eq!(ents(&rns_ifaces(&with_block, &list)), 2);
+        // Every spelling the app may send for the plain modes still works: absent, false, true.
+        assert!(matches!(cfg(json!(false)).reticulum, Reticulum::Off));
+        assert!(matches!(cfg(json!(true)).reticulum, Reticulum::On));
+        assert!(matches!(cfg(json!("entries")).reticulum, Reticulum::Entries));
+        let none: Config = serde_json::from_value(json!({"dir": "/x"})).unwrap();
+        assert!(matches!(none.reticulum, Reticulum::Off));
+    }
+
+    /// An entry's passphrase is never in what a log line or a failed assert prints of the config.
+    #[cfg(any(target_os = "linux", target_os = "android", target_os = "ios"))]
+    #[test]
+    fn an_entry_point_prints_without_its_passphrase() {
+        let mut e = plan_entry("aa", true);
+        e.passphrase = Some("sekret-in-debug".into());
+        assert!(!format!("{e:?}").contains("sekret-in-debug"));
+        assert!(format!("{e:?}").contains("has_passphrase: true"));
     }
 }

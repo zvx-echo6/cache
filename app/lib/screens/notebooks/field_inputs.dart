@@ -262,6 +262,13 @@ Future<NbPhoto?> choosePhoto(BuildContext context, NotebookState notebook) async
   if (camera == null) return null;
   try {
     return await addPhoto(notebook, camera: camera);
+  } on PlatformException catch (e) {
+    // The camera was refused (or is switched off for Cache): say so plainly; the entry and the rest of the editor carry on.
+    final refused = camera && (e.code == 'camera_access_denied' || e.code == 'camera_access_restricted');
+    if (context.mounted) {
+      ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(refused ? "Cache can't use the camera. You can still choose a photo from your phone." : 'Could not add the photo: $e')));
+    }
+    return null;
   } catch (e) {
     if (context.mounted) ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Could not add the photo: $e')));
     return null;

@@ -187,6 +187,37 @@ void main() {
     await r.dispose(tester);
   });
 
+  testWidgets('a status refresh takes what the engine has said since (a link dropped by the other device) into the log, once', (tester) async {
+    final r = await SettingsRig.create(tester);
+    final lines = <String>[];
+    final said = <String>[];
+    List<String> take() {
+      final out = [...said];
+      said.clear();
+      return out;
+    }
+
+    final sharing = SharingState(
+      policy: r.policy,
+      supportDir: () async => r.dir,
+      kinds: const [],
+      log: lines.add,
+      drainLog: take,
+      every: (d, run) => _HandTimer(d, run),
+      opener: (_) async => r.sync,
+    );
+    await tester.runAsync(sharing.setUp);
+    lines.clear();
+    // a round in the engine dropped a link: the line is in the engine's buffer, and the next refresh takes it
+    said.add('Desk unlinked this device');
+    await tester.runAsync(sharing.refresh);
+    expect(lines, ['Desk unlinked this device']);
+    await tester.runAsync(sharing.refresh);
+    expect(lines, ['Desk unlinked this device'], reason: 'taken once; a refresh with nothing said adds nothing');
+    sharing.dispose();
+    await r.dispose(tester);
+  });
+
   test('no callback from the engine into Dart remains: nothing registers one, the lines are asked for', () {
     for (final f in [
       File('lib/main.dart'),

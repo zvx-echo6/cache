@@ -23,8 +23,11 @@ No data, library content or language model ships inside Cache. The maps, library
 - Other map layers in the Cache catalog, each with the credit it asks for: Bureau of Land Management public datasets (BLM National GTLF); USDA Forest Service Motor Vehicle Use Map and National Forest System trails and roads (Enterprise Data Warehouse); USGS Gap Analysis Project PAD-US 4.1 (doi:10.5066/P96WBCHS); USDA and USGS The National Map: Orthoimagery (public domain); Esri World Imagery (online only, Esri's terms apply: Source: Esri, Vantor, Earthstar Geographics, and the GIS User Community).
 - Kiwix: the library. Files come from the Kiwix library (https://library.kiwix.org), made by Kiwix and the openZIM project. The articles inside each file keep their own license (Wikipedia and most others: CC BY-SA), which the file states.
 - PeerTube: videos from the PeerTube sites you connect. Each video keeps the license its author set. PeerTube itself is AGPL-3.0. https://joinpeertube.org
+- BIP-39 English word list: the 2,048 words Cache shows as the three words when two devices link nearby (vendored as a text file in the Reticulum crate). MIT License, per the BIP's own copyright statement (BIP-0039, Marek Palatinus, Pavol Rusnak, Aaron Voisine, Sean Bowe). Taken from github.com/bitcoin/bips, bip-0039/english.txt, repository commit fdcd8024595bc1e97db73883e716dbb91627c371. https://github.com/bitcoin/bips/blob/master/bip-0039.mediawiki
 
 ## Native libraries and tools
+
+- Prns Android BLE adapter: adapted from personal-hopspot/mobile/android at Prns v0.3.8-hotfix.1, commit 92a9613fd3fa2cdd827f2e222f65d4a305360463. Copyright (c) 2026 The Prns Authors; used under the MIT license, retained in third_party/prns_android/LICENSE-MIT. https://github.com/KenAKAFrosty/Prns
 
 - llama.cpp and ggml (the model runner): MIT, Copyright the ggml authors. https://github.com/ggml-org/llama.cpp
 - libzim 9.8.2 (reads ZIM files): GPL-2.0-or-later, openZIM. Source: https://github.com/openzim/libzim
@@ -43,6 +46,7 @@ No data, library content or language model ships inside Cache. The maps, library
 - fake-indexeddb 6.2.8 (in-memory IndexedDB and Web Storage for ZIM pages in Cache's readers; the licence is also under Open-source licenses): Apache-2.0, Copyright 2017 Jeremy Scheff. https://github.com/dumbmatter/fakeIndexedDB
 - PDFium (draws PDF pages and reads their text, through the pdfrx package; the pdfium-binaries build chromium/7811): BSD-3-Clause, Copyright 2014 The PDFium Authors. Inside it: FreeType (FreeType License), Little CMS (MIT), libjpeg-turbo (IJG and BSD-3-Clause), OpenJPEG (BSD-2-Clause), libpng (PNG Reference Library License 2), zlib (zlib license), libtiff (libtiff license), Anti-Grain Geometry 2.3, Abseil (Apache-2.0), ICU (Unicode License v3), fast_float and simdutf (MIT), and LLVM libc (Apache-2.0 with LLVM exceptions). The build itself: MIT, Copyright 2014-2025 Benoit Blanchon. https://pdfium.googlesource.com/pdfium/ and https://github.com/bblanchon/pdfium-binaries
 - Google ML Kit text recognition (reads scanned PDF pages on Android when a PDF is added, through the cache_ocr package; com.google.mlkit:text-recognition 16.0.1 with its bundled Latin model, nothing downloaded at run time): used under the ML Kit Terms of Service, Copyright Google LLC. https://developers.google.com/ml-kit/terms
+- zxing-cpp 3.1.1 (reads the QR code when Cache scans a link code with the camera, through the flutter_zxing package; built into the app's native library, with its bundled libzint code writer, BSD-3-Clause, Copyright Robin Stuart and the Zint contributors): Apache-2.0, Copyright 2016 Nu-book Inc. and 2016 ZXing authors. https://github.com/zxing-cpp/zxing-cpp
 - LLVM libc++ (libc++_shared.so from the Android NDK): Apache-2.0 with LLVM exceptions.
 - Flutter and Dart (framework, engine and tools): BSD-3-Clause, Copyright the Flutter Authors and the Dart project authors. The licenses of the libraries inside the Flutter engine are listed under Open-source licenses.
 
@@ -65,7 +69,13 @@ Taken from `app/pubspec.lock` (every package the app is built with, direct and i
 - args 2.7.0: BSD-3-Clause (Copyright 2013, the Dart project authors.)
 - async 2.13.1: BSD-3-Clause (Copyright 2015, the Dart project authors.)
 - boolean_selector 2.1.2: BSD-3-Clause (Copyright 2016, the Dart project authors.)
+- camera 0.12.2: BSD-3-Clause (Copyright 2013 The Flutter Authors)
+- camera_android_camerax 0.7.6+2: BSD-3-Clause (Copyright 2013 The Flutter Authors)
+- camera_avfoundation 0.11.1: BSD-3-Clause (Copyright 2013 The Flutter Authors)
+- camera_platform_interface 2.15.1: BSD-3-Clause (Copyright 2013 The Flutter Authors)
+- camera_web 0.3.6: BSD-3-Clause (Copyright 2013 The Flutter Authors)
 - characters 1.4.1: BSD-3-Clause (Copyright 2019, the Dart project authors.)
+- charcode 1.4.0: BSD-3-Clause (Copyright 2014, the Dart project authors.)
 - clock 1.1.2: Apache-2.0
 - code_assets 1.2.1: BSD-3-Clause (Copyright 2025, the Dart project authors.)
 - collection 1.19.1: BSD-3-Clause (Copyright 2015, the Dart project authors.)
@@ -114,6 +124,7 @@ Taken from `app/pubspec.lock` (every package the app is built with, direct and i
 - flutter_secure_storage_web 2.1.1: BSD-3-Clause (Copyright 2017 German Saprykin)
 - flutter_secure_storage_windows 4.2.2: BSD-3-Clause (Copyright 2017 German Saprykin)
 - flutter_tts 4.2.5: MIT (Copyright (c) 2018 Daniel Lutton)
+- flutter_zxing 3.1.1: MIT (Copyright (c) 2022 Khoren Markosyan)
 - geoclue 0.1.1: MPL-2.0
 - geolocator 14.1.2: MIT (Copyright (c) 2018 Baseflow)
 - geolocator_android 5.2.1: MIT (Copyright (c) 2018 Baseflow)
@@ -191,6 +202,7 @@ Taken from `app/pubspec.lock` (every package the app is built with, direct and i
 - sqlite3 3.5.2: MIT (Copyright (c) 2020 Simon Binder)
 - stack_trace 1.12.1: BSD-3-Clause (Copyright 2014, the Dart project authors.)
 - stream_channel 2.1.4: BSD-3-Clause (Copyright 2015, the Dart project authors.)
+- stream_transform 2.1.2: BSD-3-Clause (Copyright 2017, the Dart project authors.)
 - string_scanner 1.4.1: BSD-3-Clause (Copyright 2014, the Dart project authors.)
 - sync_http 0.3.1: BSD-3-Clause (Copyright 2017, the Dart project authors.)
 - synchronized 3.5.0: MIT (Copyright (c) 2016, Alexandre Roux Tekartik.)
@@ -227,6 +239,7 @@ Taken from `app/pubspec.lock` (every package the app is built with, direct and i
 - xdg_directories 1.1.0: BSD-3-Clause (Copyright 2013 The Flutter Authors. All rights reserved.)
 - xml 7.0.1: MIT (Copyright (c) 2006-2026 Lukas Renggli.)
 - yaml 3.1.4: MIT (Copyright (c) 2014, the Dart project authors.)
+- zxing2 0.2.4: BSD-3-Clause (Copyright (c) 2023, zxing-dart.) Used only by the tests, to read the link-code QR back; not in the app.
 
 ## Rust crates
 

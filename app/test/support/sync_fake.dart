@@ -1,4 +1,12 @@
 import 'package:cache/sharing/sharing_state.dart';
+import 'package:flutter/material.dart';
+import 'package:flutter_test/flutter_test.dart';
+
+/// The lines of the link code under the QR on "Show my link code" (one line, or two when it does not fit one).
+List<String> linkCodeLines(WidgetTester tester) => tester
+    .widgetList<Text>(find.descendant(of: find.byKey(const ValueKey('link-code-text')), matching: find.byType(Text)))
+    .map((t) => t.data!)
+    .toList();
 
 /// A sync engine with no network: remembers shares and peers, and answers like the real one.
 class FakeSync implements SyncCoreLike {
@@ -14,7 +22,7 @@ class FakeSync implements SyncCoreLike {
   Object? linkError;
 
   /// The code `link_code` answers (a test of the QR gives a real-sized one).
-  String codeOverride = 'CACHE1-TESTCODE';
+  String codeOverride = 'CACHE-7KQF-M2XD-P4WN-R7TA-H3JC-V6YB-Q5LE-W2FS-ZQ';
 
   /// The free space and the kept-free reserve `status` answers.
   int freeBytes = 10 << 30;
@@ -36,6 +44,60 @@ class FakeSync implements SyncCoreLike {
   /// The items switched off, by share id, as `set_off` last left them.
   final off = <String, List<String>>{};
 
+  /// Makes a peer report how it is reached now: `via` is 'direct', 'relay' or 'wifi' (Reticulum's local discovery), and it was just seen.
+  void reach(String peer, String via) {
+    final p = peers.firstWhere((p) => p['id'] == peer);
+    p['via'] = via;
+    p['last_seen'] = DateTime.now().millisecondsSinceEpoch;
+    p['error'] = null;
+  }
+
+  /// The entry points (what `entry_points` answers), each `{id, host, port, private, network_name, has_passphrase, on, cap_bytes, t,
+  /// dev, status, checked}`; a test sets `status` by hand to walk the states the engine reports.
+  final entries = <Map<String, Object?>>[];
+
+  /// The engine's log lines `status` answers (`{at, text}`, newest first).
+  final log = <Map<String, Object?>>[];
+
+  /// What `status` lists as waiting (step 3): `{peer, peer_name, share_id, share, path, what, size, reason}`.
+  final waiting = <Map<String, Object?>>[];
+
+  /// Makes a peer reach through the entry point [entryId] and be judged [speed] ("fast", "medium" or "slow").
+  void reachThrough(String peer, String entryId, {String speed = 'fast'}) {
+    reach(peer, 'entry:$entryId');
+    peers.firstWhere((p) => p['id'] == peer)['speed'] = speed;
+  }
+
+  /// Adds an entry point as the engine lists one.
+  Map<String, Object?> addEntry(String id, String host, int port, {bool private = false, String? network, bool pass = false, bool on = true, String status = 'connected', int cap = 50 << 20}) {
+    final e = <String, Object?>{
+      'id': id, 'host': host, 'port': port, 'private': private, 'network_name': network, 'has_passphrase': pass, 'on': on,
+      'cap_bytes': cap, 't': 1, 'dev': 'me', 'status': on ? status : 'off', 'checked': DateTime.now().millisecondsSinceEpoch,
+    };
+    entries.add(e);
+    return e;
+  }
+
+  // Nearby linking (the engine's `pairing_*` and `nearby_*` calls). A test sets [nearbyDevices] and [nearbyState] by hand to walk the
+  // states the engine goes through; the three `nearbyAfter` fields are what the person's own taps leave behind.
+
+  /// True between `pairing_open` and `pairing_close`.
+  bool pairingOpen = false;
+
+  /// When set, `pairing_open` fails with it (an engine with no Nearby here).
+  Object? pairingOpenError;
+
+  /// What `nearby_list` answers: `{id, name (null: not known yet), via}`.
+  final nearbyDevices = <Map<String, Object?>>[];
+
+  /// What `nearby_state` answers.
+  Map<String, Object?> nearbyState = {'state': 'idle'};
+
+  /// The state after `nearby_link`, after `nearby_answer` with ok true, and with ok false.
+  Map<String, Object?> nearbyAfterLink = {'state': 'exchanging', 'name': 'Pixel 8'};
+  Map<String, Object?> nearbyAfterYes = {'state': 'waiting', 'name': 'Pixel 8'};
+  Map<String, Object?> nearbyAfterNo = {'state': 'dropped', 'reason': 'cancelled'};
+
   @override
   Future<Map<String, dynamic>> call(String method, [Map<String, Object?> args = const {}]) async {
     calls.add(method);
@@ -53,10 +115,48 @@ class FakeSync implements SyncCoreLike {
           'peers': peers,
           'shares': [for (final s in shares) {'files': 0, 'bytes': 0, 'pending_files': 0, 'pending_bytes': 0, ...s, 'off': off[s['id']]}],
           'offers': [],
+          if (waiting.isNotEmpty) 'waiting': waiting,
           'transfer': null,
           'paused': null,
-          'log': [],
+          'log': log,
         };
+      case 'entry_points':
+        return {'entries': [for (final e in entries) Map<String, Object?>.of(e)]};
+      case 'entry_point_set':
+        // The engine's checks and its plain messages.
+        final id = args['id'] as String?;
+        final have = id == null ? null : entries.where((e) => e['id'] == id).firstOrNull;
+        if (id != null && have == null) throw Exception('There is no such entry point.');
+        final host = ((args['host'] ?? have?['host'] ?? '') as String).trim();
+        final port = (args['port'] ?? have?['port'] ?? 0) as int;
+        final private = (args['private'] ?? have?['private'] ?? false) as bool;
+        final network = args.containsKey('network_name') ? (args['network_name'] as String?) : have?['network_name'] as String?;
+        final pass = args['passphrase'] != null ? (args['passphrase'] as String).isNotEmpty : (have?['has_passphrase'] ?? false) as bool;
+        if (host.isEmpty) throw Exception('Enter the address of the entry point.');
+        if (port < 1 || port > 65535) throw Exception('The port has to be a number from 1 to 65535.');
+        if (private && (network ?? '').isEmpty && !pass) throw Exception('A private entry point needs a network name or a passphrase.');
+        if (entries.any((e) => e['id'] != id && e['port'] == port && (e['host'] as String).toLowerCase() == host.toLowerCase())) {
+          throw Exception('That entry point is already in your list.');
+        }
+        final nid = id ?? 'e${entries.length + 1}${DateTime.now().microsecondsSinceEpoch}';
+        final rec = <String, Object?>{
+          'id': nid, 'host': host, 'port': port, 'private': private, 'network_name': private && (network ?? '').isNotEmpty ? network : null,
+          'has_passphrase': private && pass, 'on': (args['on'] ?? have?['on'] ?? true) as bool, 'cap_bytes': args['cap_bytes'] ?? have?['cap_bytes'] ?? (50 << 20),
+          't': ((have?['t'] as int?) ?? 0) + 1, 'dev': 'me', 'status': 'connecting', 'checked': DateTime.now().millisecondsSinceEpoch,
+        };
+        entries
+          ..removeWhere((e) => e['id'] == nid)
+          ..add(rec);
+        return {'ok': true, 'id': nid};
+      case 'entry_point_on':
+        final e = entries.where((e) => e['id'] == args['id']).firstOrNull;
+        if (e == null) throw Exception('There is no such entry point.');
+        e['on'] = args['on'];
+        e['status'] = args['on'] == true ? 'connecting' : 'off';
+        return {'ok': true};
+      case 'entry_point_remove':
+        entries.removeWhere((e) => e['id'] == args['id']);
+        return {'ok': true};
       case 'link_code':
         return {'code': codeOverride, 'valid_secs': 900};
       case 'link':
@@ -117,6 +217,24 @@ class FakeSync implements SyncCoreLike {
         final out = {for (final e in inbox.entries) e.key: Map.of(e.value)};
         inbox.clear();
         return {'secrets': out};
+      case 'pairing_open':
+        if (pairingOpenError != null) throw pairingOpenError!;
+        pairingOpen = true;
+        return {};
+      case 'pairing_close':
+        pairingOpen = false;
+        nearbyState = {'state': 'idle'};
+        return {};
+      case 'nearby_list':
+        return {'devices': [for (final d in nearbyDevices) Map<String, Object?>.of(d)]};
+      case 'nearby_state':
+        return Map<String, Object?>.of(nearbyState);
+      case 'nearby_link':
+        nearbyState = Map.of(nearbyAfterLink);
+        return {};
+      case 'nearby_answer':
+        nearbyState = Map.of(args['ok'] == true ? nearbyAfterYes : nearbyAfterNo);
+        return {};
       case 'share_items':
         return {'items': items[args['id']] ?? const []};
       default:
