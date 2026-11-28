@@ -2363,7 +2363,9 @@ impl Inner {
             // A change of the entry points goes to every linked device (whatever it shares), coalesced like a folder's.
             let entries = dirty.iter().any(|d| d == ENTRIES_NOTICE);
             dirty.retain(|d| d != ENTRIES_NOTICE);
-            let peers: Vec<String> = self.saved.lock().unwrap().peers.iter().map(|p| p.id.clone()).collect();
+            // A Reticulum pairing reply may still be on its way to the reader of the code. It does not admit this device
+            // until that reply checks out, so an early hello would be silently ignored and hold its link gate until timeout.
+            let peers: Vec<String> = self.saved.lock().unwrap().peers.iter().filter(|p| !p.unconfirmed || p.rns.is_none()).map(|p| p.id.clone()).collect();
             for peer in peers {
                 let mut wanted: Vec<String> = if self.peer_has_summary(&peer) { dirty.iter().filter(|sh| self.shares_with(sh, &peer)).cloned().collect() } else { Vec::new() };
                 if entries {
@@ -3034,7 +3036,9 @@ impl Inner {
         self.drop_unconfirmed();
         // Also lets a former device that is past its 30 days go.
         self.push_former();
-        let peers: Vec<Peer> = self.saved.lock().unwrap().peers.iter().filter(|p| scope.has_peer(&p.id)).cloned().collect();
+        // The reader of a Reticulum code starts the first round after saving the verified reply. Its authenticated request
+        // confirms our waiting link in answer/answer_delta; starting this direction earlier races that save and stalls here.
+        let peers: Vec<Peer> = self.saved.lock().unwrap().peers.iter().filter(|p| scope.has_peer(&p.id) && (!p.unconfirmed || p.rns.is_none())).cloned().collect();
         {
             // Every device this round covers has been asked as of now (the safety round counts from it).
             let (mut lc, now) = (self.last_contact.lock().unwrap(), Instant::now());
