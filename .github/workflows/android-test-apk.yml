@@ -1,6 +1,6 @@
 # A side-by-side test APK of Cache for Android: package com.happylittlellc.cache.test, label "Cache test", so it installs next to
 # the Play install with its own data. Run by hand on any branch that has the cacheTestApk switch in
-# app/android/app/build.gradle.kts (rel-30 and later); it builds that branch's commit. Uploads the APK as a workflow artifact;
+# app/android/app/build.gradle.kts (rel-30 and later); source_ref can select another branch, tag or full commit. Uploads the APK as a workflow artifact;
 # nothing goes to Google Play. The release build (android-play.yml) never sets the switch, so it is unchanged.
 #
 # Signing: the Play upload key, exactly as android-play.yml handles it (decoded into the runner's temp folder, removed after,
@@ -12,6 +12,11 @@ name: Android test APK
 on:
   workflow_dispatch:
     inputs:
+      source_ref:
+        description: 'Branch, tag or full commit to build; blank uses the workflow ref'
+        type: string
+        required: false
+        default: ''
       test_build_number:
         description: 'Optional test versionCode: 100001–2100000000; blank uses 100000 + run number'
         type: string
@@ -34,6 +39,7 @@ jobs:
     runs-on: ubuntu-latest
     outputs:
       test_build_number: ${{ steps.number.outputs.test_build_number }}
+      source_sha: ${{ steps.source.outputs.sha }}
     steps:
       - name: Validate test build number
         id: number
@@ -59,6 +65,24 @@ jobs:
               output.write(f"test_build_number={selected}\n")
           print(f"Test APK versionCode: {selected}")
           PY
+      - name: Validate the source reference
+        env:
+          SOURCE_REF: ${{ inputs.source_ref }}
+        run: |
+          if [[ "$SOURCE_REF" =~ ^[0-9a-fA-F]{7,39}$ ]]; then
+            echo "::error::Use a full 40-character commit SHA or a branch/tag name; shortened commit IDs cannot be checked out by this workflow."
+            exit 1
+          fi
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.source_ref || github.ref }}
+      - name: Resolve the source commit
+        id: source
+        run: |
+          source_sha=$(git rev-parse HEAD)
+          [[ "$source_sha" =~ ^[0-9a-f]{40}$ ]] || { echo "::error::Could not resolve the checked-out source commit"; exit 1; }
+          echo "sha=$source_sha" >> "$GITHUB_OUTPUT"
+          echo "Source commit: $source_sha"
 
   routing:
     needs: plan
@@ -66,6 +90,8 @@ jobs:
     timeout-minutes: 150
     steps:
       - uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.plan.outputs.source_sha }}
       - name: NDK
         run: |
           yes | "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" --install "ndk;${NDK_VERSION}" > /dev/null
@@ -122,6 +148,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
         with:
+          ref: ${{ needs.plan.outputs.source_sha }}
           submodules: recursive
       - name: Free disk space
         run: |
@@ -230,7 +257,10 @@ jobs:
           # an upgrade over a higher installed test build requires an explicit higher override.
           flutter build apk --release --target-platform android-arm64 --build-number="$TEST_BUILD_NUMBER"
           mkdir -p "$GITHUB_WORKSPACE/out"
-          cp build/app/outputs/flutter-apk/app-release.apk "$GITHUB_WORKSPACE/out/Cache-test-${GITHUB_SHA::7}.apk"
+          source_sha=$(git rev-parse HEAD)
+          [[ "$source_sha" =~ ^[0-9a-f]{40}$ ]] || { echo "::error::Could not resolve the checked-out source commit"; exit 1; }
+          cp build/app/outputs/flutter-apk/app-release.apk "$GITHUB_WORKSPACE/out/Cache-test-${source_sha::7}.apk"
+          printf 'source_sha=%s\ntest_build_number=%s\n' "$source_sha" "$TEST_BUILD_NUMBER" > "$GITHUB_WORKSPACE/out/source.txt"
       - name: Verify the APK
         run: |
           apk=$(ls out/*.apk)
@@ -272,7 +302,9 @@ jobs:
       - uses: actions/upload-artifact@v4
         with:
           name: Cache-test-apk
-          path: out/*.apk
+          path: |
+            out/*.apk
+            out/source.txt
           retention-days: 7
       - name: Save cache (Cargo registry cache) (main and rel-1.1 only)
         if: success() && (github.ref == 'refs/heads/main' || github.ref == 'refs/heads/rel-1.1') && steps.cache-1.outputs.cache-primary-key != '' && steps.cache-1.outputs.cache-hit != 'true'
