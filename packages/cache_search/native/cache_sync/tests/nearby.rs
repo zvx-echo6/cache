@@ -166,9 +166,14 @@ fn a_man_in_the_middle_makes_the_words_differ_and_nothing_is_kept() {
     // The two people compare, see they differ, and cancel.
     call(&a, "nearby_answer", json!({"ok": false}));
     call(&b, "nearby_answer", json!({"ok": false}));
-    wait("A and B dropped", 20, || state_is(&a, "dropped") && state_is(&b, "dropped"));
-    call(&r1, "nearby_answer", json!({"ok": false}));
-    call(&r2, "nearby_answer", json!({"ok": false}));
+    // Each endpoint's cancellation also ends the relay's session. Wait for that propagation: answering on a relay after
+    // the remote Cancel arrived would try to answer a session that has already ended.
+    wait("all four dropped with nothing kept", 20, || {
+        [("a", &a), ("r1", &r1), ("b", &b), ("r2", &r2)].iter().all(|(n, e)| state_is(e, "dropped") && peers(&d(n)) == 0)
+    });
+    for e in [&a, &r1, &b, &r2] {
+        assert_eq!(state(e)["reason"], "cancelled");
+    }
     std::thread::sleep(std::time::Duration::from_secs(2));
     for n in ["a", "b", "r1", "r2"] {
         assert_eq!(peers(&d(n)), 0, "{n} keeps no link");
